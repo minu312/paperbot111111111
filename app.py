@@ -9,6 +9,7 @@ from bson.objectid import ObjectId
 # Environment Variables (Heroku Settings -> Config Vars walin danna)
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 ADMIN_ID = int(os.environ.get('ADMIN_ID', 0))
+ADMIN_GROUP_ID = int(os.environ.get('ADMIN_GROUP_ID', 0))
 MONGO_URI = os.environ.get('MONGO_URI')
 URL = os.environ.get('HEROKU_APP_URL')
 
@@ -30,6 +31,34 @@ def start(message):
     if not users_col.find_one({"user_id": user_id}):
         users_col.insert_one({"user_id": user_id, "username": message.from_user.username})
     bot.reply_to(message, "Welcome! Mata ona paper eke nama (Udaharanayak: essay) type karala yawanna.")
+
+@bot.message_handler(commands=['contact'])
+def contact(message):
+    parts = message.text.split(None, 1)
+    if len(parts) < 2 or not parts[1].strip():
+        bot.reply_to(message, "Usage: /contact <your message>")
+        return
+
+    user_message = parts[1].strip()
+    user = message.from_user
+    first_name = user.first_name or ""
+    last_name = user.last_name or ""
+    full_name = (first_name + " " + last_name).strip() or user.username or str(user.id)
+
+    group_text = (
+        f"Message from User ID: {user.id}\n"
+        f"Name: {full_name}\n"
+        f"Message: {user_message}"
+    )
+
+    if ADMIN_GROUP_ID:
+        try:
+            bot.send_message(ADMIN_GROUP_ID, group_text)
+            bot.reply_to(message, "Your message has been sent to the admin group.")
+        except Exception:
+            bot.reply_to(message, "Failed to send your message. Please try again later.")
+    else:
+        bot.reply_to(message, "Admin group is not configured.")
 
 @bot.message_handler(content_types=['document'])
 def handle_docs(message):

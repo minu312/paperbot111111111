@@ -1,9 +1,10 @@
 import os
 import telebot
-from telebot.types import InlineQueryResultCachedDocument
+from telebot.types import InlineQueryResultCachedDocument, InlineKeyboardMarkup, InlineKeyboardButton
 from flask import Flask, request, render_template_string
 from pymongo import MongoClient
 import uuid
+from bson.objectid import ObjectId
 
 # Environment Variables (Heroku Settings -> Config Vars walin danna)
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
@@ -28,7 +29,7 @@ def start(message):
     user_id = message.from_user.id
     if not users_col.find_one({"user_id": user_id}):
         users_col.insert_one({"user_id": user_id, "username": message.from_user.username})
-    bot.reply_to(message, "Welcome! Type @oyage_bot_username and search for a paper name.")
+    bot.reply_to(message, "Welcome! Mata ona paper eke nama (Udaharanayak: essay) type karala yawanna.")
 
 @bot.message_handler(content_types=['document'])
 def handle_docs(message):
@@ -40,6 +41,47 @@ def handle_docs(message):
     else:
         bot.reply_to(message, "You are not authorized to upload files.")
 
+# ALUTH KALLA 1: User Text ekak (ex: essay) yawwama file list eka buttons widihata yawanawa
+@bot.message_handler(func=lambda message: True, content_types=['text'])
+def search_files_text(message):
+    if message.text.startswith('/'):
+        return
+        
+    query = message.text.lower()
+    # Database eken e namata match wena files 10k hoyanawa
+    results = list(files_col.find({"file_name": {"$regex": query}}).limit(10))
+    
+    if not results:
+        bot.reply_to(message, "Sorry, oya namata adalawa papers mokuth hamba une naha.")
+        return
+        
+    # Buttons list eka hadanawa
+    markup = InlineKeyboardMarkup()
+    markup.row_width = 1
+    for f in results:
+        # Button eka hadanawa file eke namath ekka
+        btn = InlineKeyboardButton(f['file_name'], callback_data=str(f['_id']))
+        markup.add(btn)
+        
+    bot.reply_to(message, "🔍 Menna mama hoyagaththa papers. Ona file eka uda click karanna:", reply_markup=markup)
+
+# ALUTH KALLA 2: User button eka click kalama file eka send karanawa
+@bot.callback_query_handler(func=lambda call: True)
+def send_file_callback(call):
+    try:
+        # Click karapu file eka DB eken gannawa
+        file_data = files_col.find_one({"_id": ObjectId(call.data)})
+        if file_data:
+            bot.send_document(call.message.chat.id, file_data['file_id'])
+            bot.answer_callback_query(call.id, "File eka ewanawa...")
+            # History ekata save karanawa
+            history_col.insert_one({"user_id": call.from_user.id, "query": "button_click", "file_sent": file_data['file_name']})
+        else:
+            bot.answer_callback_query(call.id, "File eka database eke naha!", show_alert=True)
+    except Exception as e:
+        bot.answer_callback_query(call.id, "Error ekak awa!", show_alert=True)
+
+# Parana inline search ekath thiyala thiyenne (Ona nam ekenuth ganna puluwan)
 @bot.inline_handler(lambda query: len(query.query) > 0)
 def query_text(inline_query):
     query = inline_query.query.lower()
@@ -53,8 +95,6 @@ def query_text(inline_query):
             document_file_id=f['file_id']
         )
         inline_results.append(res)
-        history_col.insert_one({"user_id": inline_query.from_user.id, "query": query, "file_sent": f['file_name']})
-
     bot.answer_inline_query(inline_query.id, inline_results)
 
 # ================= FLASK WEB PANEL (BOOTSTRAP) =================
@@ -65,9 +105,6 @@ def webhook():
     update = telebot.types.Update.de_json(json_string)
     bot.process_new_updates([update])
     return 'OK', 200
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
 
 @app.route('/')
 def admin_panel():
@@ -137,9 +174,6 @@ def admin_panel():
                 </div>
             </div>
         </div>
-
-        <!-- Bootstrap JS Bundle -->
-        <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     </body>
     </html>
     """
@@ -147,5 +181,5 @@ def admin_panel():
 
 if __name__ == '__main__':
     bot.remove_webhook()
-    bot.set_webhook(url=f"{URL}/{BOT_TOKEN}")
+    bot.set_webhook(url=f"{URL}/webhook")
     app.run(host="0.0.0.0", port=int(os.environ.get('PORT', 5000)))

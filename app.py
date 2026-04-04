@@ -12,6 +12,7 @@ from html import escape
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 ADMIN_ID = int(os.environ.get('ADMIN_ID', 0))
 ADMIN_GROUP_ID = int(os.environ.get('ADMIN_GROUP_ID', 0))
+BACKUP_GROUP_ID = int(os.environ.get('BACKUP_GROUP_ID', 0))
 MONGO_URI = os.environ.get('MONGO_URI')
 URL = os.environ.get('HEROKU_APP_URL')
 
@@ -88,6 +89,18 @@ def search_files_text(message):
         "message": message.text,
         "timestamp": datetime.now(timezone.utc)
     })
+    # Forward message to backup group if configured
+    if BACKUP_GROUP_ID:
+        try:
+            username_display = f"@{user.username}" if user.username else str(user.id)
+            backup_text = (
+                f"[BACKUP] Message from User: {username_display} (ID: {user.id})\n"
+                f"Message: {message.text}"
+            )
+            bot.send_message(BACKUP_GROUP_ID, backup_text)
+        except Exception:
+            pass
+
     # Search the database for files matching the query (up to 10 results)
     results = list(files_col.find({"file_name": {"$regex": query}}).limit(10))
     

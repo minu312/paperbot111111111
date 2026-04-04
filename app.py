@@ -66,6 +66,9 @@ def webhook():
     bot.process_new_updates([update])
     return 'OK', 200
 
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+
 @app.route('/')
 def admin_panel():
     user_count = users_col.count_documents({})

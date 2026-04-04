@@ -6,7 +6,7 @@ from pymongo import MongoClient
 import uuid
 from bson.objectid import ObjectId
 
-# Environment Variables (Heroku Settings -> Config Vars walin danna)
+# Environment Variables (Set these in Heroku Settings -> Config Vars)
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 ADMIN_ID = int(os.environ.get('ADMIN_ID', 0))
 ADMIN_GROUP_ID = int(os.environ.get('ADMIN_GROUP_ID', 0))
@@ -30,7 +30,7 @@ def start(message):
     user_id = message.from_user.id
     if not users_col.find_one({"user_id": user_id}):
         users_col.insert_one({"user_id": user_id, "username": message.from_user.username})
-    bot.reply_to(message, "Welcome! Mata ona paper eke nama (Udaharanayak: essay) type karala yawanna.")
+    bot.reply_to(message, "Welcome! Please type the name of the paper you are looking for (e.g., essay).")
 
 @bot.message_handler(commands=['contact'])
 def contact(message):
@@ -70,47 +70,47 @@ def handle_docs(message):
     else:
         bot.reply_to(message, "You are not authorized to upload files.")
 
-# ALUTH KALLA 1: User Text ekak (ex: essay) yawwama file list eka buttons widihata yawanawa
+# Handler 1: When a user sends a text message (e.g., essay), return a list of matching files as buttons
 @bot.message_handler(func=lambda message: True, content_types=['text'])
 def search_files_text(message):
     if message.text.startswith('/'):
         return
         
     query = message.text.lower()
-    # Database eken e namata match wena files 10k hoyanawa
+    # Search the database for files matching the query (up to 10 results)
     results = list(files_col.find({"file_name": {"$regex": query}}).limit(10))
     
     if not results:
-        bot.reply_to(message, "no files in found in my database")
+        bot.reply_to(message, "Sorry, no papers were found matching that name.")
         return
         
-    # Buttons list eka hadanawa
+    # Build the inline keyboard with buttons for each result
     markup = InlineKeyboardMarkup()
     markup.row_width = 1
     for f in results:
-        # Button eka hadanawa file eke namath ekka
+        # Create a button with the file name
         btn = InlineKeyboardButton(f['file_name'], callback_data=str(f['_id']))
         markup.add(btn)
         
-    bot.reply_to(message, "🔍 Menna mama hoyagaththa papers. Ona file eka uda click karanna:", reply_markup=markup)
+    bot.reply_to(message, "🔍 Here are the papers I found. Click on a paper below to download it:", reply_markup=markup)
 
-# ALUTH KALLA 2: User button eka click kalama file eka send karanawa
+# Handler 2: When a user clicks a button, send the corresponding file
 @bot.callback_query_handler(func=lambda call: True)
 def send_file_callback(call):
     try:
-        # Click karapu file eka DB eken gannawa
+        # Retrieve the selected file from the database
         file_data = files_col.find_one({"_id": ObjectId(call.data)})
         if file_data:
             bot.send_document(call.message.chat.id, file_data['file_id'])
-            bot.answer_callback_query(call.id, "File eka ewanawa...")
-            # History ekata save karanawa
+            bot.answer_callback_query(call.id, "Sending file...")
+            # Save to history
             history_col.insert_one({"user_id": call.from_user.id, "query": "button_click", "file_sent": file_data['file_name']})
         else:
-            bot.answer_callback_query(call.id, "File eka database eke naha!", show_alert=True)
+            bot.answer_callback_query(call.id, "File not found in the database!", show_alert=True)
     except Exception as e:
-        bot.answer_callback_query(call.id, "Error ekak awa!", show_alert=True)
+        bot.answer_callback_query(call.id, "An error occurred. Please try again.", show_alert=True)
 
-# Parana inline search ekath thiyala thiyenne (Ona nam ekenuth ganna puluwan)
+# Legacy inline search handler (also available for inline queries)
 @bot.inline_handler(lambda query: len(query.query) > 0)
 def query_text(inline_query):
     query = inline_query.query.lower()

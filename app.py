@@ -43,7 +43,7 @@ def contact(message):
     user = message.from_user
     first_name = user.first_name or ""
     last_name = user.last_name or ""
-    full_name = (first_name + " " + last_name).strip()
+    full_name = (first_name + " " + last_name).strip() or user.username or str(user.id)
 
     group_text = (
         f"Message from User ID: {user.id}\n"
@@ -52,8 +52,11 @@ def contact(message):
     )
 
     if ADMIN_GROUP_ID:
-        bot.send_message(ADMIN_GROUP_ID, group_text)
-        bot.reply_to(message, "Your message has been sent to the admin group.")
+        try:
+            bot.send_message(ADMIN_GROUP_ID, group_text)
+            bot.reply_to(message, "Your message has been sent to the admin group.")
+        except Exception:
+            bot.reply_to(message, "Failed to send your message. Please try again later.")
     else:
         bot.reply_to(message, "Admin group is not configured.")
 

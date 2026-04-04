@@ -5,6 +5,8 @@ from flask import Flask, request, render_template_string
 from pymongo import MongoClient
 import uuid
 from bson.objectid import ObjectId
+from datetime import datetime, timezone
+from html import escape
 
 # Environment Variables (Set these in Heroku Settings -> Config Vars)
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
@@ -22,6 +24,7 @@ db = client['telegram_bot']
 users_col = db['users']
 files_col = db['files']
 history_col = db['history']
+messages_col = db['messages']
 
 # ================= TELEGRAM BOT LOGIC =================
 
@@ -77,6 +80,14 @@ def search_files_text(message):
         return
         
     query = message.text.lower()
+    user = message.from_user
+    # Save the message to the messages collection
+    messages_col.insert_one({
+        "user_id": user.id,
+        "username": user.username or user.first_name or str(user.id),
+        "message": message.text,
+        "timestamp": datetime.now(timezone.utc)
+    })
     # Search the database for files matching the query (up to 10 results)
     results = list(files_col.find({"file_name": {"$regex": query}}).limit(10))
     
@@ -196,6 +207,19 @@ def admin_panel():
                     </div>
                 </div>
             </div>
+
+            <div class="row mt-2">
+                <!-- User Messages Card -->
+                <div class="col-md-4 mb-3">
+                    <div class="card text-white bg-info h-100 shadow-sm">
+                        <div class="card-body text-center">
+                            <h5 class="card-title"><i class="bi bi-chat-dots-fill"></i> User Messages</h5>
+                            <p class="card-text">View all messages sent by users to the bot.</p>
+                            <a href="/messages" class="btn btn-light fw-bold">View Messages</a>
+                        </div>
+                    </div>
+                </div>
+            </div>
             
             <div class="row mt-4">
                 <div class="col-12 text-center text-muted">
@@ -207,6 +231,67 @@ def admin_panel():
     </html>
     """
     return render_template_string(html, u_count=user_count, f_count=file_count, h_count=history_count)
+
+@app.route('/messages')
+def messages_page():
+    messages = list(messages_col.find().sort("timestamp", -1).limit(200))
+
+    row_list = []
+    for m in messages:
+        ts = m.get("timestamp")
+        dt_str = escape(ts.strftime("%Y-%m-%d %H:%M:%S UTC")) if ts else "N/A"
+        username = escape(str(m.get("username", "Unknown")))
+        user_id = escape(str(m.get("user_id", "")))
+        msg_text = escape(str(m.get("message", "")))
+        row_list.append(f"""
+        <tr>
+            <td>{dt_str}</td>
+            <td>{username} <small class="text-muted">({user_id})</small></td>
+            <td>{msg_text}</td>
+        </tr>""")
+    rows = "".join(row_list)
+
+    html = """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>User Messages</title>
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
+    </head>
+    <body class="bg-light">
+        <nav class="navbar navbar-dark bg-dark mb-4 shadow">
+            <div class="container">
+                <span class="navbar-brand mb-0 h1">
+                    <i class="bi bi-chat-dots-fill"></i> User Messages
+                </span>
+            </div>
+        </nav>
+        <div class="container">
+            <a href="/" class="btn btn-secondary mb-3"><i class="bi bi-arrow-left"></i> Back to Dashboard</a>
+            <div class="card shadow-sm">
+                <div class="card-body">
+                    <table class="table table-striped table-bordered table-hover">
+                        <thead class="table-dark">
+                            <tr>
+                                <th>Date / Time</th>
+                                <th>User</th>
+                                <th>Message</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            """ + (rows if rows else '<tr><td colspan="3" class="text-center text-muted">No messages yet.</td></tr>') + """
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    return render_template_string(html)
 
 if __name__ == '__main__':
     bot.remove_webhook()

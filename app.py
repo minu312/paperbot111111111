@@ -52,7 +52,7 @@ def search_files_text(message):
     results = list(files_col.find({"file_name": {"$regex": query}}).limit(10))
     
     if not results:
-        bot.reply_to(message, "Sorry, oya namata adalawa papers mokuth hamba une naha.")
+        bot.reply_to(message, "no files in found in my database")
         return
         
     # Buttons list eka hadanawa

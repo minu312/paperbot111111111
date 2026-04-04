@@ -34,15 +34,21 @@ def start(message):
 @bot.message_handler(commands=['contact'])
 def contact_admin(message):
     user = message.from_user
-    user_info = f"User ID: {user.id}\nUsername: @{user.username}" if user.username else f"User ID: {user.id}\nName: {user.first_name}"
+    if user.username:
+        user_info = f"User ID: {user.id}\nUsername: @{user.username}"
+    else:
+        user_info = f"User ID: {user.id}\nName: {user.first_name}"
     args = message.text.split(maxsplit=1)
     if len(args) < 2 or not args[1].strip():
         bot.reply_to(message, "Please include your message after the command. Example: /contact Hello Admin")
         return
     user_message = args[1].strip()
     forward_text = f"📩 New message from user:\n{user_info}\n\nMessage:\n{user_message}"
-    bot.send_message(ADMIN_ID, forward_text)
-    bot.reply_to(message, "✅ Your message has been sent to the admin!")
+    try:
+        bot.send_message(ADMIN_ID, forward_text)
+        bot.reply_to(message, "✅ Your message has been sent to the admin!")
+    except Exception:
+        bot.reply_to(message, "❌ Failed to send your message. Please try again later.")
 
 @bot.message_handler(content_types=['document'])
 def handle_docs(message):

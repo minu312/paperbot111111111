@@ -31,6 +31,19 @@ def start(message):
         users_col.insert_one({"user_id": user_id, "username": message.from_user.username})
     bot.reply_to(message, "Welcome! Mata ona paper eke nama (Udaharanayak: essay) type karala yawanna.")
 
+@bot.message_handler(commands=['contact'])
+def contact_admin(message):
+    user = message.from_user
+    user_info = f"User ID: {user.id}\nUsername: @{user.username}" if user.username else f"User ID: {user.id}\nName: {user.first_name}"
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2 or not args[1].strip():
+        bot.reply_to(message, "Please include your message after the command. Example: /contact Hello Admin")
+        return
+    user_message = args[1].strip()
+    forward_text = f"📩 New message from user:\n{user_info}\n\nMessage:\n{user_message}"
+    bot.send_message(ADMIN_ID, forward_text)
+    bot.reply_to(message, "✅ Your message has been sent to the admin!")
+
 @bot.message_handler(content_types=['document'])
 def handle_docs(message):
     if message.from_user.id == ADMIN_ID:

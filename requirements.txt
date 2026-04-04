@@ -1,5 +1,5 @@
 pyTelegramBotAPI==4.12.0
 Flask==2.3.2
-pymongo==4.4.1
+pymongo[srv]==4.4.1
 gunicorn==21.2.0
 setuptools

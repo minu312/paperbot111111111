@@ -142,7 +142,8 @@ def broadcast(message):
         try:
             bot.send_message(user['user_id'], broadcast_text)
             success += 1
-        except Exception:
+        except Exception as e:
+            logging.warning("Broadcast failed for user_id %s: %s", user.get('user_id'), e)
             failed += 1
 
     bot.reply_to(

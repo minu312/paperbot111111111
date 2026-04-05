@@ -16,6 +16,7 @@ BOT_TOKEN = os.environ.get('BOT_TOKEN')
 ADMIN_ID = int(os.environ.get('ADMIN_ID', 0))
 ADMIN_GROUP_ID = int(os.environ.get('ADMIN_GROUP_ID', 0))
 BACKUP_GROUP_ID = int(os.environ.get('BACKUP_GROUP_ID', 0))
+OTHERS_GROUP_ID = int(os.environ.get('OTHERS_GROUP_ID', -123456789))
 MONGO_URI = os.environ.get('MONGO_URI')
 URL = os.environ.get('HEROKU_APP_URL')
 
@@ -31,6 +32,10 @@ files_col = db['files']
 history_col = db['history']
 messages_col = db['messages']
 admins_col = db['admins']
+
+# Temporary storage for admin uploads awaiting tutor tag selection
+# Maps user_id -> {"file_id": ..., "file_name": ...}
+pending_uploads = {}
 
 # ================= TELEGRAM BOT LOGIC =================
 
@@ -125,24 +130,69 @@ def remove_admin(message):
     else:
         bot.reply_to(message, f"ℹ️ User {rm_admin_id} was not found in sub-admins.")
 
+def _forward_user_submission(message, file_name=None):
+    """Forward a user's file/media submission to OTHERS_GROUP_ID with an info caption."""
+    if not OTHERS_GROUP_ID:
+        return
+    user = message.from_user
+    first = user.first_name or ""
+    last = user.last_name or ""
+    user_name = (first + " " + last).strip() or user.username or str(user.id)
+    fn_line = f"File Name: {file_name}\n" if file_name else ""
+    info_text = (
+        f"📩 User Submission\n"
+        f"From: {user_name} (ID: {user.id})\n"
+        f"{fn_line}"
+    )
+    try:
+        bot.forward_message(OTHERS_GROUP_ID, message.chat.id, message.message_id)
+        bot.send_message(OTHERS_GROUP_ID, info_text)
+    except Exception as e:
+        logging.error("Failed to forward user submission: %s", e)
+
+
 @bot.message_handler(content_types=['document'])
 def handle_docs(message):
-    is_admin = message.from_user.id == ADMIN_ID
-    is_subadmin = admins_col.count_documents({"user_id": message.from_user.id}, limit=1) > 0
+    user_id = message.from_user.id
+    is_admin = user_id == ADMIN_ID
+    is_subadmin = admins_col.count_documents({"user_id": user_id}, limit=1) > 0
     if is_admin or is_subadmin:
         file_id = message.document.file_id
         file_name = message.document.file_name.lower()
-        try:
-            if files_col.find_one({"file_name": file_name}):
-                bot.reply_to(message, f"⚠️ File '{file_name}' is already in the database. Upload rejected.")
-                return
-            files_col.insert_one({"file_name": file_name, "file_id": file_id})
-            bot.reply_to(message, f"File '{file_name}' saved successfully to MongoDB!")
-        except PyMongoError as e:
-            logging.error("Failed to save file '%s': %s", file_name, e)
-            bot.reply_to(message, f"⚠️ Failed to save '{file_name}'. Please try again.")
+        pending_uploads[user_id] = {"file_id": file_id, "file_name": file_name}
+        markup = InlineKeyboardMarkup()
+        markup.add(
+            InlineKeyboardButton("AP", callback_data="tutor_ap"),
+            InlineKeyboardButton("AD", callback_data="tutor_ad"),
+            InlineKeyboardButton("Add Tutor", callback_data="tutor_custom")
+        )
+        bot.reply_to(
+            message,
+            f"📎 File received: `{file_name}`\nSelect the tutor tag:",
+            reply_markup=markup,
+            parse_mode='Markdown'
+        )
     else:
-        bot.reply_to(message, "You are not authorized to upload files.")
+        file_name = message.document.file_name if message.document.file_name else "Unknown"
+        _forward_user_submission(message, file_name=file_name)
+
+
+@bot.message_handler(content_types=['photo'])
+def handle_photos(message):
+    user_id = message.from_user.id
+    is_admin = user_id == ADMIN_ID
+    is_subadmin = admins_col.count_documents({"user_id": user_id}, limit=1) > 0
+    if not is_admin and not is_subadmin:
+        _forward_user_submission(message)
+
+
+@bot.message_handler(content_types=['video', 'audio', 'voice', 'video_note'])
+def handle_media(message):
+    user_id = message.from_user.id
+    is_admin = user_id == ADMIN_ID
+    is_subadmin = admins_col.count_documents({"user_id": user_id}, limit=1) > 0
+    if not is_admin and not is_subadmin:
+        _forward_user_submission(message)
 
 @bot.message_handler(func=lambda message: (
     ADMIN_GROUP_ID and
@@ -230,6 +280,12 @@ def search_files_text(message):
     
     if not results:
         bot.reply_to(message, "Sorry, no papers were found matching that name.")
+        # Forward unmatched search to OTHERS group so admins can see what users are looking for
+        user_id = message.from_user.id
+        is_admin = user_id == ADMIN_ID
+        is_subadmin = admins_col.count_documents({"user_id": user_id}, limit=1) > 0
+        if not is_admin and not is_subadmin:
+            _forward_user_submission(message)
         return
         
     # Build the inline keyboard with buttons for each result
@@ -243,7 +299,61 @@ def search_files_text(message):
     bot.reply_to(message, "🔍 Here are the papers I found. Click on a paper below to download it:", reply_markup=markup)
 
 # Handler 2: When a user clicks a button, send the corresponding file
-@bot.callback_query_handler(func=lambda call: True)
+@bot.callback_query_handler(func=lambda call: call.data.startswith('tutor_'))
+def handle_tutor_callback(call):
+    user_id = call.from_user.id
+    if user_id not in pending_uploads:
+        bot.answer_callback_query(call.id, "No pending upload found. Please re-upload the file.", show_alert=True)
+        return
+
+    upload = pending_uploads[user_id]
+    file_id = upload['file_id']
+    file_name = upload['file_name']
+
+    if call.data == 'tutor_ap':
+        tagged_name = file_name + ' #Anuradha Perera'
+        bot.answer_callback_query(call.id)
+        _save_file_with_tag(call.message, file_id, tagged_name, "Saved with #Anuradha Perera")
+        pending_uploads.pop(user_id, None)
+    elif call.data == 'tutor_ad':
+        tagged_name = file_name + ' #Amila Dasanayaka'
+        bot.answer_callback_query(call.id)
+        _save_file_with_tag(call.message, file_id, tagged_name, "Saved with #Amila Dasanayaka")
+        pending_uploads.pop(user_id, None)
+    elif call.data == 'tutor_custom':
+        bot.answer_callback_query(call.id)
+        msg = bot.send_message(call.message.chat.id, "Send the tutor name now:")
+        bot.register_next_step_handler(msg, handle_custom_tutor, user_id)
+
+
+def _save_file_with_tag(reply_target, file_id, tagged_name, success_msg):
+    try:
+        if files_col.find_one({"file_name": tagged_name}):
+            bot.send_message(reply_target.chat.id, f"⚠️ File '{tagged_name}' is already in the database. Upload rejected.")
+        else:
+            files_col.insert_one({"file_name": tagged_name, "file_id": file_id})
+            bot.send_message(reply_target.chat.id, f"✅ {success_msg}")
+    except PyMongoError as e:
+        logging.error("Failed to save file '%s': %s", tagged_name, e)
+        bot.send_message(reply_target.chat.id, "⚠️ Failed to save. Please try again.")
+
+
+def handle_custom_tutor(message, user_id):
+    if user_id not in pending_uploads:
+        bot.reply_to(message, "Session expired. Please re-upload the file.")
+        return
+    upload = pending_uploads.pop(user_id)
+    file_id = upload['file_id']
+    file_name = upload['file_name']
+    tutor_name = message.text.strip() if message.text else ""
+    if not tutor_name:
+        bot.reply_to(message, "⚠️ No tutor name provided. Please re-upload the file and try again.")
+        return
+    tagged_name = file_name + f' #{tutor_name}'
+    _save_file_with_tag(message, file_id, tagged_name, f"Saved with #{tutor_name}")
+
+
+@bot.callback_query_handler(func=lambda call: not call.data.startswith('tutor_'))
 def send_file_callback(call):
     try:
         # Retrieve the selected file from the database

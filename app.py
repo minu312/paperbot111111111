@@ -248,6 +248,22 @@ def broadcast(message):
         f"✅ Broadcast complete!\nSuccessfully sent to: {success} users\nFailed: {failed} users"
     )
 
+@bot.message_handler(commands=['cleardb'])
+def cleardb(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    bot.reply_to(
+        message,
+        "⚠️ WARNING: This will delete ALL files from the database. This action cannot be undone.\n\nTo confirm, send the command: /confirmclear"
+    )
+
+@bot.message_handler(commands=['confirmclear'])
+def confirmclear(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    files_col.delete_many({})
+    bot.reply_to(message, "✅ Database cleared. All files have been deleted.")
+
 # Handler 1: When a user sends a text message (e.g., essay), return a list of matching files as buttons
 @bot.message_handler(func=lambda message: True, content_types=['text'])
 def search_files_text(message):

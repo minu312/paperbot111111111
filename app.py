@@ -30,6 +30,7 @@ users_col = db['users']
 files_col = db['files']
 history_col = db['history']
 messages_col = db['messages']
+admins_col = db['admins']
 
 # ================= TELEGRAM BOT LOGIC =================
 
@@ -86,9 +87,49 @@ def contact(message):
     else:
         bot.reply_to(message, "Admin group is not configured.")
 
+@bot.message_handler(commands=['addadmin'])
+def add_admin(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    parts = message.text.split(None, 1)
+    if len(parts) < 2 or not parts[1].strip():
+        bot.reply_to(message, "Usage: /addadmin <user_id>")
+        return
+    try:
+        new_admin_id = int(parts[1].strip())
+    except ValueError:
+        bot.reply_to(message, "⚠️ Invalid user ID. Please provide a numeric user ID.")
+        return
+    if not admins_col.find_one({"user_id": new_admin_id}):
+        admins_col.insert_one({"user_id": new_admin_id, "role": "subadmin"})
+        bot.reply_to(message, f"✅ User {new_admin_id} added as a sub-admin.")
+    else:
+        bot.reply_to(message, f"ℹ️ User {new_admin_id} is already a sub-admin.")
+
+@bot.message_handler(commands=['rmadmin'])
+def remove_admin(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    parts = message.text.split(None, 1)
+    if len(parts) < 2 or not parts[1].strip():
+        bot.reply_to(message, "Usage: /rmadmin <user_id>")
+        return
+    try:
+        rm_admin_id = int(parts[1].strip())
+    except ValueError:
+        bot.reply_to(message, "⚠️ Invalid user ID. Please provide a numeric user ID.")
+        return
+    result = admins_col.delete_one({"user_id": rm_admin_id})
+    if result.deleted_count > 0:
+        bot.reply_to(message, f"✅ User {rm_admin_id} has been removed from sub-admins.")
+    else:
+        bot.reply_to(message, f"ℹ️ User {rm_admin_id} was not found in sub-admins.")
+
 @bot.message_handler(content_types=['document'])
 def handle_docs(message):
-    if message.from_user.id == ADMIN_ID:
+    is_admin = message.from_user.id == ADMIN_ID
+    is_subadmin = admins_col.count_documents({"user_id": message.from_user.id}, limit=1) > 0
+    if is_admin or is_subadmin:
         file_id = message.document.file_id
         file_name = message.document.file_name.lower()
         try:
@@ -111,6 +152,12 @@ def handle_docs(message):
     message.reply_to_message.from_user.id == bot.get_me().id
 ), content_types=['text'])
 def admin_reply_to_user(message):
+    sender_id = message.from_user.id
+    is_admin = sender_id == ADMIN_ID
+    is_subadmin = admins_col.count_documents({"user_id": sender_id}, limit=1) > 0
+    if not is_admin and not is_subadmin:
+        bot.reply_to(message, "⚠️ You do not have permission to reply to users.")
+        return
     replied = message.reply_to_message
     match = re.search(r'User ID: (\d+)', replied.text or '')
     if not match:

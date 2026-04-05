@@ -264,6 +264,24 @@ def confirmclear(message):
     files_col.delete_many({})
     bot.reply_to(message, "✅ Database cleared. All files have been deleted.")
 
+@bot.message_handler(commands=['rmfile', 'deletefile'])
+def remove_file(message):
+    user_id = message.from_user.id
+    is_admin = user_id == ADMIN_ID
+    is_subadmin = admins_col.count_documents({"user_id": user_id}, limit=1) > 0
+    if not is_admin and not is_subadmin:
+        return
+    parts = message.text.split(None, 1)
+    if len(parts) < 2 or not parts[1].strip():
+        bot.reply_to(message, "⚠️ Usage: /rmfile <exact_file_name>")
+        return
+    query = parts[1].strip().lower()
+    result = files_col.delete_many({"file_name": query})
+    if result.deleted_count > 0:
+        bot.reply_to(message, f"✅ Successfully deleted {result.deleted_count} file(s) named '{query}'.")
+    else:
+        bot.reply_to(message, f"⚠️ No file found with the exact name '{query}'. Make sure to include any tutor tags if they exist.")
+
 # Handler 1: When a user sends a text message (e.g., essay), return a list of matching files as buttons
 @bot.message_handler(func=lambda message: True, content_types=['text'])
 def search_files_text(message):

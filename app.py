@@ -1,4 +1,5 @@
 import os
+import re
 import telebot
 from telebot.types import InlineQueryResultCachedDocument, InlineKeyboardMarkup, InlineKeyboardButton
 from flask import Flask, request, render_template_string
@@ -50,7 +51,8 @@ def contact(message):
     full_name = (first_name + " " + last_name).strip() or user.username or str(user.id)
 
     group_text = (
-        f"Message from User ID: {user.id}\n"
+        f"📩 New Contact Message\n"
+        f"User ID: {user.id}\n"
         f"Name: {full_name}\n"
         f"Message: {user_message}"
     )
@@ -73,6 +75,27 @@ def handle_docs(message):
         bot.reply_to(message, f"File '{file_name}' saved successfully to MongoDB!")
     else:
         bot.reply_to(message, "You are not authorized to upload files.")
+
+@bot.message_handler(func=lambda message: (
+    ADMIN_GROUP_ID and
+    message.chat.id == ADMIN_GROUP_ID and
+    message.reply_to_message is not None and
+    message.reply_to_message.from_user is not None and
+    message.reply_to_message.from_user.id == bot.get_me().id
+), content_types=['text'])
+def admin_reply_to_user(message):
+    replied = message.reply_to_message
+    match = re.search(r'User ID: (\d+)', replied.text or '')
+    if not match:
+        bot.reply_to(message, "⚠️ Could not find a User ID in the replied message.")
+        return
+    user_id = int(match.group(1))
+    reply_text = f"👨‍💻 Admin Reply:\n{message.text}"
+    try:
+        bot.send_message(user_id, reply_text)
+        bot.reply_to(message, "✅ Reply sent to the user.")
+    except Exception:
+        bot.reply_to(message, "❌ Failed to send reply. The user may have blocked the bot.")
 
 # Handler 1: When a user sends a text message (e.g., essay), return a list of matching files as buttons
 @bot.message_handler(func=lambda message: True, content_types=['text'])

@@ -308,8 +308,20 @@ def broadcast(message):
 
     for user in users_col.find():
         try:
-            bot.send_message(user['user_id'], broadcast_text)
+            bot.send_message(user['user_id'], broadcast_text, parse_mode='Markdown')
             success += 1
+        except telebot.apihelper.ApiTelegramException as e:
+            if "parse" in str(e).lower() or "markdown" in str(e).lower():
+                try:
+                    # Fallback to plain text if markdown fails
+                    bot.send_message(user['user_id'], broadcast_text)
+                    success += 1
+                except Exception as ex:
+                    logging.warning("Broadcast fallback failed for user_id %s: %s", user.get('user_id'), ex)
+                    failed += 1
+            else:
+                logging.warning("Broadcast failed for user_id %s: %s", user.get('user_id'), e)
+                failed += 1
         except Exception as e:
             logging.warning("Broadcast failed for user_id %s: %s", user.get('user_id'), e)
             failed += 1

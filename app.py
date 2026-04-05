@@ -37,10 +37,6 @@ history_col = db['history']
 messages_col = db['messages']
 admins_col = db['admins']
 
-# Temporary storage for admin uploads awaiting tutor tag selection
-# Maps user_id -> {"file_id": ..., "file_name": ...}
-pending_uploads = {}
-
 # ================= FORCE SUBSCRIBE HELPERS =================
 
 def get_subscription_status(user_id):
@@ -222,19 +218,15 @@ def handle_docs(message):
     if is_admin or is_subadmin:
         file_id = message.document.file_id
         file_name = message.document.file_name.lower()
-        pending_uploads[user_id] = {"file_id": file_id, "file_name": file_name}
-        markup = InlineKeyboardMarkup()
-        markup.add(
-            InlineKeyboardButton("AP", callback_data="tutor_ap"),
-            InlineKeyboardButton("AD", callback_data="tutor_ad"),
-            InlineKeyboardButton("Add Tutor", callback_data="tutor_custom")
-        )
-        bot.reply_to(
-            message,
-            f"📎 File received: `{file_name}`\nSelect the tutor tag:",
-            reply_markup=markup,
-            parse_mode='Markdown'
-        )
+        try:
+            if files_col.find_one({"file_name": file_name}):
+                bot.reply_to(message, f"⚠️ File '{file_name}' is already in the database. Upload rejected.")
+            else:
+                files_col.insert_one({"file_name": file_name, "file_id": file_id})
+                bot.reply_to(message, f"✅ Saved '{file_name}' successfully.")
+        except PyMongoError as e:
+            logging.error("Failed to save file '%s': %s", file_name, e)
+            bot.reply_to(message, "⚠️ Failed to save. Please try again.")
     else:
         file_name = message.document.file_name if message.document.file_name else "Unknown"
         _forward_user_submission(message, file_name=file_name)
@@ -411,61 +403,6 @@ def search_files_text(message):
         
     bot.reply_to(message, "🔍 Here are the papers I found. Click on a paper below to download it:", reply_markup=markup)
 
-# Handler 2: When a user clicks a button, send the corresponding file
-@bot.callback_query_handler(func=lambda call: call.data.startswith('tutor_'))
-def handle_tutor_callback(call):
-    user_id = call.from_user.id
-    if user_id not in pending_uploads:
-        bot.answer_callback_query(call.id, "No pending upload found. Please re-upload the file.", show_alert=True)
-        return
-
-    upload = pending_uploads[user_id]
-    file_id = upload['file_id']
-    file_name = upload['file_name']
-
-    if call.data == 'tutor_ap':
-        tagged_name = file_name + ' #Anuradha Perera'
-        bot.answer_callback_query(call.id)
-        _save_file_with_tag(call.message, file_id, tagged_name, "Saved with #Anuradha Perera")
-        pending_uploads.pop(user_id, None)
-    elif call.data == 'tutor_ad':
-        tagged_name = file_name + ' #Amila Dasanayaka'
-        bot.answer_callback_query(call.id)
-        _save_file_with_tag(call.message, file_id, tagged_name, "Saved with #Amila Dasanayaka")
-        pending_uploads.pop(user_id, None)
-    elif call.data == 'tutor_custom':
-        bot.answer_callback_query(call.id)
-        msg = bot.send_message(call.message.chat.id, "Send the tutor name now:")
-        bot.register_next_step_handler(msg, handle_custom_tutor, user_id)
-
-
-def _save_file_with_tag(reply_target, file_id, tagged_name, success_msg):
-    try:
-        if files_col.find_one({"file_name": tagged_name}):
-            bot.send_message(reply_target.chat.id, f"⚠️ File '{tagged_name}' is already in the database. Upload rejected.")
-        else:
-            files_col.insert_one({"file_name": tagged_name, "file_id": file_id})
-            bot.send_message(reply_target.chat.id, f"✅ {success_msg}")
-    except PyMongoError as e:
-        logging.error("Failed to save file '%s': %s", tagged_name, e)
-        bot.send_message(reply_target.chat.id, "⚠️ Failed to save. Please try again.")
-
-
-def handle_custom_tutor(message, user_id):
-    if user_id not in pending_uploads:
-        bot.reply_to(message, "Session expired. Please re-upload the file.")
-        return
-    upload = pending_uploads.pop(user_id)
-    file_id = upload['file_id']
-    file_name = upload['file_name']
-    tutor_name = message.text.strip() if message.text else ""
-    if not tutor_name:
-        bot.reply_to(message, "⚠️ No tutor name provided. Please re-upload the file and try again.")
-        return
-    tagged_name = file_name + f' #{tutor_name}'
-    _save_file_with_tag(message, file_id, tagged_name, f"Saved with #{tutor_name}")
-
-
 @bot.callback_query_handler(func=lambda call: call.data == 'verify_sub')
 def verify_subscription_callback(call):
     status = get_subscription_status(call.from_user.id)
@@ -490,7 +427,7 @@ def verify_subscription_callback(call):
             pass
 
 
-@bot.callback_query_handler(func=lambda call: not call.data.startswith('tutor_') and call.data != 'verify_sub')
+@bot.callback_query_handler(func=lambda call: call.data != 'verify_sub' and len(call.data) == 24)
 def send_file_callback(call):
     try:
         # Retrieve the selected file from the database

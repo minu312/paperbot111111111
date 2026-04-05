@@ -41,6 +41,8 @@ pending_uploads = {}
 
 @bot.message_handler(commands=['start'])
 def start(message):
+    if message.chat.type != 'private':
+        return
     user_id = message.from_user.id
     if not users_col.find_one({"user_id": user_id}):
         users_col.insert_one({"user_id": user_id, "username": message.from_user.username})
@@ -48,6 +50,8 @@ def start(message):
 
 @bot.message_handler(commands=['help'])
 def help_command(message):
+    if message.chat.type != 'private':
+        return
     help_text = (
         "📚 *PaperBot Help Guide*\n\n"
         "Here is how you can use this bot:\n\n"
@@ -65,6 +69,8 @@ def help_command(message):
 
 @bot.message_handler(commands=['contact'])
 def contact(message):
+    if message.chat.type != 'private':
+        return
     parts = message.text.split(None, 1)
     if len(parts) < 2 or not parts[1].strip():
         bot.reply_to(message, "Usage: /contact <your message>")
@@ -94,6 +100,8 @@ def contact(message):
 
 @bot.message_handler(commands=['addadmin'])
 def add_admin(message):
+    if message.chat.type != 'private':
+        return
     if message.from_user.id != ADMIN_ID:
         return
     parts = message.text.split(None, 1)
@@ -113,6 +121,8 @@ def add_admin(message):
 
 @bot.message_handler(commands=['rmadmin'])
 def remove_admin(message):
+    if message.chat.type != 'private':
+        return
     if message.from_user.id != ADMIN_ID:
         return
     parts = message.text.split(None, 1)
@@ -153,6 +163,8 @@ def _forward_user_submission(message, file_name=None):
 
 @bot.message_handler(content_types=['document'])
 def handle_docs(message):
+    if message.chat.type != 'private':
+        return
     user_id = message.from_user.id
     is_admin = user_id == ADMIN_ID
     is_subadmin = admins_col.count_documents({"user_id": user_id}, limit=1) > 0
@@ -179,6 +191,8 @@ def handle_docs(message):
 
 @bot.message_handler(content_types=['photo'])
 def handle_photos(message):
+    if message.chat.type != 'private':
+        return
     user_id = message.from_user.id
     is_admin = user_id == ADMIN_ID
     is_subadmin = admins_col.count_documents({"user_id": user_id}, limit=1) > 0
@@ -188,6 +202,8 @@ def handle_photos(message):
 
 @bot.message_handler(content_types=['video', 'audio', 'voice', 'video_note'])
 def handle_media(message):
+    if message.chat.type != 'private':
+        return
     user_id = message.from_user.id
     is_admin = user_id == ADMIN_ID
     is_subadmin = admins_col.count_documents({"user_id": user_id}, limit=1) > 0
@@ -223,6 +239,8 @@ def admin_reply_to_user(message):
 
 @bot.message_handler(commands=['broadcast'])
 def broadcast(message):
+    if message.chat.type != 'private':
+        return
     if message.from_user.id != ADMIN_ID:
         return
 
@@ -250,6 +268,8 @@ def broadcast(message):
 
 @bot.message_handler(commands=['cleardb'])
 def cleardb(message):
+    if message.chat.type != 'private':
+        return
     if message.from_user.id != ADMIN_ID:
         return
     bot.reply_to(
@@ -259,6 +279,8 @@ def cleardb(message):
 
 @bot.message_handler(commands=['confirmclear'])
 def confirmclear(message):
+    if message.chat.type != 'private':
+        return
     if message.from_user.id != ADMIN_ID:
         return
     files_col.delete_many({})
@@ -266,6 +288,8 @@ def confirmclear(message):
 
 @bot.message_handler(commands=['rmfile', 'deletefile'])
 def remove_file(message):
+    if message.chat.type != 'private':
+        return
     user_id = message.from_user.id
     is_admin = user_id == ADMIN_ID
     is_subadmin = admins_col.count_documents({"user_id": user_id}, limit=1) > 0
@@ -285,6 +309,8 @@ def remove_file(message):
 # Handler 1: When a user sends a text message (e.g., essay), return a list of matching files as buttons
 @bot.message_handler(func=lambda message: True, content_types=['text'])
 def search_files_text(message):
+    if message.chat.type != 'private':
+        return
     if message.text.startswith('/'):
         return
         

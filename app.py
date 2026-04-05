@@ -93,7 +93,7 @@ def start(message):
         "🤖 **Welcome to Lᵉᵃʳᶯ -X - PaperBot!**\n\n"
         "The ultimate place to find your past papers and study materials.\n\n"
         "🔍 **How to search:**\n"
-        "Just type the name of the paper, subject, or year (e.g:- `ad s2 paper 01`) and send it to me as a normal message.\n\n"
+        "Just type the name of the paper, subject, or Teacher (e.g:- `ad s2 paper 01`) and send it to me as a normal message.\n\n"
         "📩 **Contact Admin:**\n"
         "If you need help or want to request a paper, use the `/contact` command followed by your message.\n"
         "*Example:* `/contact Please add the AP Full Paper 09.`\n\n"

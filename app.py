@@ -20,6 +20,14 @@ OTHERS_GROUP_ID = int(os.environ.get('OTHERS_GROUP_ID', -123456789))
 MONGO_URI = os.environ.get('MONGO_URI')
 URL = os.environ.get('HEROKU_APP_URL')
 
+# Force Subscribe Configuration
+_force_channel_raw = os.environ.get('FORCE_CHANNEL_ID')
+_force_group_raw = os.environ.get('FORCE_GROUP_ID')
+FORCE_CHANNEL_ID = int(_force_channel_raw) if _force_channel_raw else None
+FORCE_GROUP_ID = int(_force_group_raw) if _force_group_raw else None
+FORCE_CHANNEL_URL = os.environ.get('FORCE_CHANNEL_URL')
+FORCE_GROUP_URL = os.environ.get('FORCE_GROUP_URL')
+
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -37,6 +45,42 @@ admins_col = db['admins']
 # Maps user_id -> {"file_id": ..., "file_name": ...}
 pending_uploads = {}
 
+# ================= FORCE SUBSCRIBE HELPERS =================
+
+def check_force_subscribe(user_id):
+    """Return (in_channel, in_group). Both True for admins or if not configured."""
+    if user_id == ADMIN_ID or admins_col.count_documents({"user_id": user_id}, limit=1) > 0:
+        return True, True
+
+    joined_statuses = {'member', 'administrator', 'creator'}
+
+    def _is_member(chat_id):
+        if not chat_id:
+            return True
+        try:
+            member = bot.get_chat_member(chat_id, user_id)
+            return member.status in joined_statuses
+        except Exception as e:
+            logging.warning("check_force_subscribe: get_chat_member(%s, %s) failed: %s", chat_id, user_id, e)
+            return True
+
+    in_channel = _is_member(FORCE_CHANNEL_ID)
+    in_group = _is_member(FORCE_GROUP_ID)
+    return in_channel, in_group
+
+
+def build_subscribe_markup(in_channel, in_group):
+    """Build an InlineKeyboardMarkup with the appropriate join/verify buttons."""
+    markup = InlineKeyboardMarkup()
+    if not in_channel and FORCE_CHANNEL_URL:
+        markup.add(InlineKeyboardButton("📢 Join Our Channel", url=FORCE_CHANNEL_URL))
+    if not in_group and FORCE_GROUP_URL:
+        markup.add(InlineKeyboardButton("👥 Join Our Group", url=FORCE_GROUP_URL))
+    markup.add(InlineKeyboardButton("✅ Verify", callback_data='verify_sub'))
+    return markup
+
+_FORCE_SUBSCRIBE_MSG = "⚠️ To use this bot, please join our channel and group first, then click Verify."
+
 # ================= TELEGRAM BOT LOGIC =================
 
 @bot.message_handler(commands=['start'])
@@ -44,6 +88,13 @@ def start(message):
     user_id = message.from_user.id
     if not users_col.find_one({"user_id": user_id}):
         users_col.insert_one({"user_id": user_id, "username": message.from_user.username})
+
+    in_channel, in_group = check_force_subscribe(user_id)
+    if not in_channel or not in_group:
+        markup = build_subscribe_markup(in_channel, in_group)
+        bot.reply_to(message, _FORCE_SUBSCRIBE_MSG, reply_markup=markup)
+        return
+
     bot.reply_to(message, "Welcome! Please type the name of the paper you are looking for (e.g., essay).")
 
 @bot.message_handler(commands=['help'])
@@ -65,6 +116,13 @@ def help_command(message):
 
 @bot.message_handler(commands=['contact'])
 def contact(message):
+    user_id = message.from_user.id
+    in_channel, in_group = check_force_subscribe(user_id)
+    if not in_channel or not in_group:
+        markup = build_subscribe_markup(in_channel, in_group)
+        bot.reply_to(message, _FORCE_SUBSCRIBE_MSG, reply_markup=markup)
+        return
+
     parts = message.text.split(None, 1)
     if len(parts) < 2 or not parts[1].strip():
         bot.reply_to(message, "Usage: /contact <your message>")
@@ -287,7 +345,14 @@ def remove_file(message):
 def search_files_text(message):
     if message.text.startswith('/'):
         return
-        
+
+    user_id = message.from_user.id
+    in_channel, in_group = check_force_subscribe(user_id)
+    if not in_channel or not in_group:
+        markup = build_subscribe_markup(in_channel, in_group)
+        bot.reply_to(message, _FORCE_SUBSCRIBE_MSG, reply_markup=markup)
+        return
+
     query = message.text.lower()
     user = message.from_user
     # Save the message to the messages collection
@@ -387,7 +452,38 @@ def handle_custom_tutor(message, user_id):
     _save_file_with_tag(message, file_id, tagged_name, f"Saved with #{tutor_name}")
 
 
-@bot.callback_query_handler(func=lambda call: not call.data.startswith('tutor_'))
+@bot.callback_query_handler(func=lambda call: call.data == 'verify_sub')
+def verify_subscription(call):
+    user_id = call.from_user.id
+    in_channel, in_group = check_force_subscribe(user_id)
+    if in_channel and in_group:
+        bot.answer_callback_query(call.id)
+        try:
+            bot.edit_message_text(
+                "🎉 Access Granted\n\nYou've joined the required channel and group successfully.\nYou can now use all bot features.",
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id
+            )
+        except Exception as e:
+            logging.warning("verify_subscription: edit_message_text failed: %s", e)
+            bot.send_message(
+                call.message.chat.id,
+                "🎉 Access Granted\n\nYou've joined the required channel and group successfully.\nYou can now use all bot features."
+            )
+    else:
+        bot.answer_callback_query(call.id, "Please join the required channel/group first.", show_alert=True)
+        markup = build_subscribe_markup(in_channel, in_group)
+        try:
+            bot.edit_message_reply_markup(
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                reply_markup=markup
+            )
+        except Exception:
+            pass
+
+
+@bot.callback_query_handler(func=lambda call: not call.data.startswith('tutor_') and call.data != 'verify_sub')
 def send_file_callback(call):
     try:
         # Retrieve the selected file from the database

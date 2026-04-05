@@ -1,9 +1,11 @@
 import os
 import re
+import logging
 import telebot
 from telebot.types import InlineQueryResultCachedDocument, InlineKeyboardMarkup, InlineKeyboardButton
 from flask import Flask, request, render_template_string
 from pymongo import MongoClient
+from pymongo.errors import PyMongoError
 import uuid
 from bson.objectid import ObjectId
 from datetime import datetime, timezone
@@ -19,6 +21,7 @@ URL = os.environ.get('HEROKU_APP_URL')
 
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
+logging.basicConfig(level=logging.INFO)
 
 # Database Setup
 client = MongoClient(MONGO_URI)
@@ -88,8 +91,12 @@ def handle_docs(message):
     if message.from_user.id == ADMIN_ID:
         file_id = message.document.file_id
         file_name = message.document.file_name.lower()
-        files_col.insert_one({"file_name": file_name, "file_id": file_id})
-        bot.reply_to(message, f"File '{file_name}' saved successfully to MongoDB!")
+        try:
+            files_col.insert_one({"file_name": file_name, "file_id": file_id})
+            bot.reply_to(message, f"File '{file_name}' saved successfully to MongoDB!")
+        except PyMongoError as e:
+            logging.error("Failed to save file '%s': %s", file_name, e)
+            bot.reply_to(message, f"⚠️ Failed to save '{file_name}'. Please try again.")
     else:
         bot.reply_to(message, "You are not authorized to upload files.")
 

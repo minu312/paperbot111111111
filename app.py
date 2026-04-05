@@ -37,6 +37,23 @@ def start(message):
         users_col.insert_one({"user_id": user_id, "username": message.from_user.username})
     bot.reply_to(message, "Welcome! Please type the name of the paper you are looking for (e.g., essay).")
 
+@bot.message_handler(commands=['help'])
+def help_command(message):
+    help_text = (
+        "📚 *PaperBot Help Guide*\n\n"
+        "Here is how you can use this bot:\n\n"
+        "🔍 *Searching for Papers:*\n"
+        "Simply type the name of the subject, year, or keyword and send it to me as a normal message.\n"
+        "*Example:* `biology` or `2023 physics`\n"
+        "I will instantly search the database and send you the matching files!\n\n"
+        "📩 *Contacting the Admin:*\n"
+        "If you need help, have a specific request, or found an issue, you can send a message directly to the admins using the `/contact` command.\n"
+        "Just type `/contact` followed by your message.\n"
+        "*Example:* `/contact Hello, could you please upload the 2022 Chemistry paper?`\n\n"
+        "Just type your search keyword below to get started!"
+    )
+    bot.reply_to(message, help_text, parse_mode='Markdown')
+
 @bot.message_handler(commands=['contact'])
 def contact(message):
     parts = message.text.split(None, 1)

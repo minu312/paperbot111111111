@@ -92,6 +92,9 @@ def handle_docs(message):
         file_id = message.document.file_id
         file_name = message.document.file_name.lower()
         try:
+            if files_col.find_one({"file_name": file_name}):
+                bot.reply_to(message, f"⚠️ File '{file_name}' is already in the database. Upload rejected.")
+                return
             files_col.insert_one({"file_name": file_name, "file_id": file_id})
             bot.reply_to(message, f"File '{file_name}' saved successfully to MongoDB!")
         except PyMongoError as e:

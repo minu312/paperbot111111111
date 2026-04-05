@@ -210,7 +210,7 @@ def _forward_user_submission(message, file_name=None):
         f"📩 User Submission\n"
         f"From: {user_name} (ID: {user.id})\n"
         f"{fn_line}"
-        f"*(Reply to this message to answer the user)*"
+        f"\n*(Reply to this message to answer the user)*"
     )
     try:
         bot.forward_message(OTHERS_GROUP_ID, message.chat.id, message.message_id)
@@ -265,7 +265,7 @@ def handle_media(message):
         _forward_user_submission(message)
 
 @bot.message_handler(func=lambda message: (
-    (ADMIN_GROUP_ID or OTHERS_GROUP_ID or BACKUP_GROUP_ID) and
+    any([ADMIN_GROUP_ID, OTHERS_GROUP_ID, BACKUP_GROUP_ID]) and
     message.chat.id in [ADMIN_GROUP_ID, OTHERS_GROUP_ID, BACKUP_GROUP_ID] and
     message.reply_to_message is not None and
     message.reply_to_message.from_user is not None and

@@ -124,6 +124,32 @@ def admin_reply_to_user(message):
     except Exception:
         bot.reply_to(message, "❌ Failed to send reply. The user may have blocked the bot.")
 
+@bot.message_handler(commands=['broadcast'])
+def broadcast(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    parts = message.text.split(None, 1)
+    if len(parts) < 2 or not parts[1].strip():
+        bot.reply_to(message, "⚠️ Usage: /broadcast <your message>")
+        return
+
+    broadcast_text = parts[1].strip()
+    success = 0
+    failed = 0
+
+    for user in users_col.find():
+        try:
+            bot.send_message(user['user_id'], broadcast_text)
+            success += 1
+        except Exception:
+            failed += 1
+
+    bot.reply_to(
+        message,
+        f"✅ Broadcast complete!\nSuccessfully sent to: {success} users\nFailed: {failed} users"
+    )
+
 # Handler 1: When a user sends a text message (e.g., essay), return a list of matching files as buttons
 @bot.message_handler(func=lambda message: True, content_types=['text'])
 def search_files_text(message):

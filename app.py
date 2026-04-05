@@ -210,6 +210,7 @@ def _forward_user_submission(message, file_name=None):
         f"📩 User Submission\n"
         f"From: {user_name} (ID: {user.id})\n"
         f"{fn_line}"
+        f"*(Reply to this message to answer the user)*"
     )
     try:
         bot.forward_message(OTHERS_GROUP_ID, message.chat.id, message.message_id)
@@ -264,8 +265,8 @@ def handle_media(message):
         _forward_user_submission(message)
 
 @bot.message_handler(func=lambda message: (
-    ADMIN_GROUP_ID and
-    message.chat.id == ADMIN_GROUP_ID and
+    (ADMIN_GROUP_ID or OTHERS_GROUP_ID or BACKUP_GROUP_ID) and
+    message.chat.id in [ADMIN_GROUP_ID, OTHERS_GROUP_ID, BACKUP_GROUP_ID] and
     message.reply_to_message is not None and
     message.reply_to_message.from_user is not None and
     message.reply_to_message.from_user.id == bot.get_me().id
@@ -278,11 +279,15 @@ def admin_reply_to_user(message):
         bot.reply_to(message, "⚠️ You do not have permission to reply to users.")
         return
     replied = message.reply_to_message
-    match = re.search(r'User ID: (\d+)', replied.text or '')
-    if not match:
-        bot.reply_to(message, "⚠️ Could not find a User ID in the replied message.")
+    text_to_search = replied.text or replied.caption or ''
+    match = re.search(r'ID: (\d+)', text_to_search)
+    if match:
+        user_id = int(match.group(1))
+    elif replied.forward_from:
+        user_id = replied.forward_from.id
+    else:
+        bot.reply_to(message, "⚠️ Could not find the User ID. Please reply to the info message that contains the user's ID.")
         return
-    user_id = int(match.group(1))
     reply_text = f"👨‍💻 Admin Reply:\n{message.text}"
     try:
         bot.send_message(user_id, reply_text)

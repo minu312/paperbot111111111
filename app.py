@@ -149,7 +149,7 @@ def contact(message):
     if ADMIN_GROUP_ID:
         try:
             bot.send_message(ADMIN_GROUP_ID, group_text)
-            bot.reply_to(message, "Your message has been sent to the admin group.")
+            bot.reply_to(message, "Your message has been sent to the admins")
         except Exception:
             bot.reply_to(message, "Failed to send your message. Please try again later.")
     else:

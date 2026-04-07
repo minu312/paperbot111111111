@@ -108,8 +108,18 @@ def increment_gemini_usage(user_id):
 
 
 def ask_gemini(question):
-    model = genai.GenerativeModel('gemini-1.5-flash')
-    response = model.generate_content(question)
+    try:
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        response = model.generate_content(question)
+    except Exception as e:
+        if "404" in str(e):
+            try:
+                model = genai.GenerativeModel('gemini-pro')
+                response = model.generate_content(question)
+            except Exception as inner_e:
+                raise inner_e
+        else:
+            raise e
     return response.text
 
 

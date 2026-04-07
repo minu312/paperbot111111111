@@ -2,8 +2,8 @@ import os
 import re
 import logging
 import telebot
-from telebot.types import InlineQueryResultCachedDocument, InlineKeyboardMarkup, InlineKeyboardButton
-from flask import Flask, request, render_template_string
+from telebot.types import InlineQueryResultCachedDocument, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+from flask import Flask, request, render_template_string, jsonify
 from pymongo import MongoClient
 from pymongo.errors import PyMongoError
 import uuid
@@ -121,6 +121,19 @@ def help_command(message):
         "Just type your search keyword below to get started!"
     )
     bot.reply_to(message, help_text, parse_mode='Markdown')
+
+@bot.message_handler(commands=['app'])
+def open_miniapp(message):
+    if message.chat.type != 'private':
+        return
+    if not enforce_subscription(message):
+        return
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton(
+        "📚 Open PaperBot App",
+        web_app=WebAppInfo(url=f"{URL}/miniapp")
+    ))
+    bot.reply_to(message, "Tap the button below to open the PaperBot Mini App! 🚀", reply_markup=markup)
 
 @bot.message_handler(commands=['contact'])
 def contact(message):
@@ -485,6 +498,26 @@ def query_text(inline_query):
         inline_results.append(res)
     bot.answer_inline_query(inline_query.id, inline_results)
 
+@bot.message_handler(content_types=['web_app_data'])
+def handle_web_app_data(message):
+    file_id = message.web_app_data.data
+    # Validate that the file_id exists in our database before sending
+    if not files_col.find_one({"file_id": file_id}):
+        logging.warning(
+            "web_app_data: unknown file_id requested by chat_id=%s", message.chat.id
+        )
+        bot.send_message(message.chat.id, "⚠️ File not found. Please try searching again.")
+        return
+    try:
+        bot.send_message(message.chat.id, "✅ Here is your requested paper!")
+        bot.send_document(message.chat.id, file_id)
+    except Exception as e:
+        logging.error(
+            "Failed to send web_app_data document for chat_id=%s file_id=%s: %s",
+            message.chat.id, file_id, e
+        )
+        bot.send_message(message.chat.id, "⚠️ Failed to retrieve the file. Please try again.")
+
 # ================= FLASK WEB PANEL (BOOTSTRAP) =================
 
 @app.route('/webhook', methods=['POST'])
@@ -640,6 +673,266 @@ def messages_page():
     </html>
     """
     return render_template_string(html)
+
+@app.route('/miniapp')
+def miniapp():
+    html = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>📚 PaperBot Mini App</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            background: var(--tg-theme-bg-color, #f0f4f8);
+            color: var(--tg-theme-text-color, #1a202c);
+            font-family: 'Segoe UI', sans-serif;
+            min-height: 100vh;
+        }
+        .app-header {
+            background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+            color: #fff;
+            padding: 1.2rem 1rem 1rem;
+            border-radius: 0 0 1.5rem 1.5rem;
+            margin-bottom: 1.2rem;
+            box-shadow: 0 4px 16px rgba(37,99,235,0.18);
+        }
+        .app-header h1 { font-size: 1.4rem; font-weight: 700; margin: 0; }
+        .app-header p  { font-size: 0.85rem; opacity: 0.85; margin: 0.2rem 0 0; }
+        .search-bar {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1.2rem;
+        }
+        .search-bar input {
+            flex: 1;
+            border-radius: 2rem;
+            border: 1.5px solid #c7d2fe;
+            padding: 0.55rem 1.1rem;
+            font-size: 0.97rem;
+            outline: none;
+            background: var(--tg-theme-bg-color, #fff);
+            color: var(--tg-theme-text-color, #1a202c);
+            box-shadow: 0 1px 4px rgba(37,99,235,0.07);
+        }
+        .search-bar input:focus { border-color: #2563eb; }
+        .search-bar button {
+            border-radius: 2rem;
+            padding: 0.55rem 1.3rem;
+            font-size: 0.95rem;
+            font-weight: 600;
+            background: #2563eb;
+            color: #fff;
+            border: none;
+            box-shadow: 0 2px 8px rgba(37,99,235,0.18);
+        }
+        .section-title {
+            font-size: 1rem;
+            font-weight: 700;
+            color: #2563eb;
+            margin-bottom: 0.7rem;
+            letter-spacing: 0.03em;
+        }
+        .tutor-btn {
+            border-radius: 2rem;
+            font-size: 0.88rem;
+            font-weight: 600;
+            padding: 0.5rem 1rem;
+            margin: 0.25rem;
+            border: 2px solid #2563eb;
+            background: #fff;
+            color: #2563eb;
+            transition: all 0.18s;
+        }
+        .tutor-btn:hover, .tutor-btn.active {
+            background: #2563eb;
+            color: #fff;
+        }
+        #results { margin-top: 1rem; }
+        .result-card {
+            background: var(--tg-theme-bg-color, #fff);
+            border-radius: 1rem;
+            padding: 0.85rem 1rem;
+            margin-bottom: 0.7rem;
+            box-shadow: 0 2px 8px rgba(37,99,235,0.08);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.7rem;
+        }
+        .result-card .file-name {
+            font-size: 0.92rem;
+            font-weight: 500;
+            word-break: break-word;
+            flex: 1;
+        }
+        .download-btn {
+            background: linear-gradient(135deg,#2563eb,#1d4ed8);
+            color: #fff;
+            border: none;
+            border-radius: 1.5rem;
+            padding: 0.38rem 0.95rem;
+            font-size: 0.83rem;
+            font-weight: 600;
+            white-space: nowrap;
+            box-shadow: 0 1px 6px rgba(37,99,235,0.18);
+        }
+        .no-results {
+            text-align: center;
+            color: #94a3b8;
+            font-size: 0.93rem;
+            margin: 1.5rem 0;
+        }
+        .spinner-wrap { text-align: center; padding: 1.5rem 0; }
+    </style>
+</head>
+<body>
+    <div class="app-header">
+        <h1>📚 PaperBot</h1>
+        <p>Search and download past papers instantly</p>
+    </div>
+
+    <div class="container px-3">
+        <!-- Search Bar -->
+        <div class="search-bar">
+            <input type="text" id="searchInput" placeholder="Search for a paper…" autocomplete="off">
+            <button id="searchBtn">Search</button>
+        </div>
+
+        <!-- Tutors Section -->
+        <div class="section-title">Tutors</div>
+        <div class="mb-3">
+            <button class="tutor-btn" data-tutor-tag="ap">👩‍🏫 Anuradha Perera</button>
+            <button class="tutor-btn" data-tutor-tag="ad">👨‍🏫 Amila Dasanayaka</button>
+            <button class="tutor-btn" data-tutor-tag="sd">👨‍💼 Sashanka Danujaya</button>
+        </div>
+
+        <!-- Results -->
+        <div id="results"></div>
+    </div>
+
+    <script>
+        const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
+        if (tg) { tg.ready(); tg.expand(); }
+
+        const searchInput = document.getElementById('searchInput');
+
+        searchInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') doSearch();
+        });
+
+        document.getElementById('searchBtn').addEventListener('click', doSearch);
+
+        document.querySelectorAll('.tutor-btn').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                document.querySelectorAll('.tutor-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                searchInput.value = '';
+                showLoading();
+                fetch('/api/tutor?tag=' + encodeURIComponent(btn.dataset.tutorTag))
+                    .then(r => r.json())
+                    .then(data => showResults(data))
+                    .catch(() => showError());
+            });
+        });
+
+        function clearActiveTutors() {
+            document.querySelectorAll('.tutor-btn').forEach(b => b.classList.remove('active'));
+        }
+
+        function doSearch() {
+            clearActiveTutors();
+            const q = searchInput.value.trim();
+            if (!q) { showResults([]); return; }
+            showLoading();
+            fetch('/api/search?q=' + encodeURIComponent(q))
+                .then(r => r.json())
+                .then(data => showResults(data))
+                .catch(() => showError());
+        }
+
+        function showLoading() {
+            document.getElementById('results').innerHTML =
+                '<div class="spinner-wrap"><div class="spinner-border text-primary" role="status"></div></div>';
+        }
+
+        function showError() {
+            document.getElementById('results').innerHTML =
+                '<p class="no-results">⚠️ Something went wrong. Please try again.</p>';
+        }
+
+        function showResults(data) {
+            const container = document.getElementById('results');
+            container.innerHTML = '';
+            if (!data || data.length === 0) {
+                const msg = document.createElement('p');
+                msg.className = 'no-results';
+                msg.textContent = '📭 No papers found. Try a different search.';
+                container.appendChild(msg);
+                return;
+            }
+            data.forEach(item => {
+                const card = document.createElement('div');
+                card.className = 'result-card';
+
+                const nameSpan = document.createElement('span');
+                nameSpan.className = 'file-name';
+                nameSpan.textContent = '📄 ' + item.file_name;
+
+                const btn = document.createElement('button');
+                btn.className = 'download-btn';
+                btn.textContent = '⬇ Download';
+                btn.dataset.fileId = item.file_id;
+
+                card.appendChild(nameSpan);
+                card.appendChild(btn);
+                container.appendChild(card);
+            });
+        }
+
+        document.getElementById('results').addEventListener('click', function(e) {
+            const btn = e.target.closest('.download-btn');
+            if (!btn) return;
+            const fileId = btn.dataset.fileId;
+            if (tg && tg.sendData) {
+                tg.sendData(fileId);
+            } else {
+                alert('Please open this app inside Telegram to download files.');
+            }
+        });
+    </script>
+</body>
+</html>"""
+    return render_template_string(html)
+
+
+@app.route('/api/search', methods=['GET'])
+def api_search():
+    q = request.args.get('q', '').strip()
+    if not q:
+        return jsonify([])
+    safe_q = re.escape(q)
+    results = list(files_col.find(
+        {"file_name": {"$regex": safe_q, "$options": "i"}},
+        {"_id": 0, "file_name": 1, "file_id": 1}
+    ).limit(20))
+    return jsonify(results)
+
+
+@app.route('/api/tutor', methods=['GET'])
+def api_tutor():
+    tag = request.args.get('tag', '').strip()
+    if not tag:
+        return jsonify([])
+    safe_tag = re.escape(tag)
+    results = list(files_col.find(
+        {"file_name": {"$regex": safe_tag, "$options": "i"}},
+        {"_id": 0, "file_name": 1, "file_id": 1}
+    ).limit(20))
+    return jsonify(results)
+
 
 if __name__ == '__main__':
     bot.remove_webhook()

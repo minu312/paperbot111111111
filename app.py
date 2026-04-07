@@ -868,6 +868,39 @@ MINIAPP_HTML = """
             display: none;
             white-space: nowrap;
         }
+        .sub-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(15,23,42,0.96);
+            z-index: 99999;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            text-align: center;
+            padding: 24px;
+            color: white;
+        }
+        .sub-overlay h2 {
+            font-size: 1.3rem;
+            font-weight: 700;
+            margin-bottom: 10px;
+        }
+        .sub-overlay p {
+            font-size: 0.9rem;
+            opacity: 0.85;
+            margin-bottom: 20px;
+        }
+        .sub-overlay-btn {
+            display: inline-block;
+            background: #2563eb;
+            color: white;
+            border-radius: 10px;
+            padding: 10px 22px;
+            font-weight: 600;
+            text-decoration: none;
+            margin: 5px;
+        }
     </style>
 </head>
 <body>
@@ -924,6 +957,15 @@ MINIAPP_HTML = """
         </div>
     </div>
 
+    <!-- Subscription required overlay -->
+    <div id="subOverlay" style="display:flex;" class="sub-overlay">
+        <div style="font-size:2.5rem;margin-bottom:12px;">🔒</div>
+        <h2>Access Restricted</h2>
+        <p>You must join our official Channel &amp; Group to use PaperBot.</p>
+        <div id="subOverlayLinks"></div>
+        <div style="margin-top:18px;font-size:0.8rem;opacity:0.6;">After joining, reload the app.</div>
+    </div>
+
     <!-- Toast notification -->
     <div class="toast-msg" id="toastMsg"></div>
 
@@ -935,6 +977,44 @@ MINIAPP_HTML = """
             tg.expand();
             document.body.style.background = tg.themeParams.bg_color || '#f5f7fa';
         }
+
+        // Check subscription on load
+        (function checkSubscription() {
+            if (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) {
+                const userId = tg.initDataUnsafe.user.id;
+                fetch('/api/verify_sub?user_id=' + encodeURIComponent(userId))
+                    .then(function(r) { return r.json(); })
+                    .then(function(data) {
+                        if (data.subscribed) {
+                            document.getElementById('subOverlay').style.display = 'none';
+                        } else {
+                            const linksDiv = document.getElementById('subOverlayLinks');
+                            linksDiv.innerHTML = '';
+                            if (data.channel_url) {
+                                const a = document.createElement('a');
+                                a.className = 'sub-overlay-btn';
+                                a.href = data.channel_url;
+                                a.target = '_blank';
+                                a.rel = 'noopener noreferrer';
+                                a.textContent = '📢 Join Channel';
+                                linksDiv.appendChild(a);
+                            }
+                            if (data.group_url) {
+                                const a = document.createElement('a');
+                                a.className = 'sub-overlay-btn';
+                                a.href = data.group_url;
+                                a.target = '_blank';
+                                a.rel = 'noopener noreferrer';
+                                a.textContent = '👥 Join Group';
+                                linksDiv.appendChild(a);
+                            }
+                        }
+                    })
+                    .catch(function() { /* keep overlay shown on network error */ });
+            } else {
+                // Not opened from Telegram — keep overlay shown
+            }
+        })();
 
         let currentTag = null;
 
@@ -1027,6 +1107,9 @@ MINIAPP_HTML = """
                 .then(function(data) {
                     if (data.ok) {
                         showToast('✅ Sent to your Telegram chat!', 3000);
+                    } else if (data.error === 'subscription_required') {
+                        showToast('⚠️ Please join our required Channel/Group to download files!', 4000);
+                        document.getElementById('subOverlay').style.display = 'flex';
                     } else {
                         showToast('❌ Failed to send. Please try again.', 3000);
                     }
@@ -1087,6 +1170,25 @@ def api_tutors():
         return jsonify({"files": [], "error": "Database error"}), 500
 
 
+@app.route('/api/verify_sub')
+def api_verify_sub():
+    user_id = request.args.get('user_id')
+    if not user_id:
+        return jsonify({"subscribed": False, "error": "Missing user_id"}), 400
+    try:
+        status = get_subscription_status(int(user_id))
+        subscribed = status["channel"] and status["group"]
+        result = {"subscribed": subscribed}
+        if not status["channel"] and FORCE_CHANNEL_URL:
+            result["channel_url"] = FORCE_CHANNEL_URL
+        if not status["group"] and FORCE_GROUP_URL:
+            result["group_url"] = FORCE_GROUP_URL
+        return jsonify(result)
+    except Exception as e:
+        logging.error("API verify_sub error: %s", e)
+        return jsonify({"subscribed": False, "error": "Check failed"})
+
+
 @app.route('/api/download', methods=['POST'])
 def api_download():
     data = request.get_json(silent=True) or {}
@@ -1099,6 +1201,9 @@ def api_download():
     if not file_id or not user_id:
         return jsonify({"ok": False, "error": "Missing file_id or user_id"})
     try:
+        status = get_subscription_status(int(user_id))
+        if not status["channel"] or not status["group"]:
+            return jsonify({"ok": False, "error": "subscription_required"})
         file_data = files_col.find_one({"_id": ObjectId(file_id)})
         if not file_data:
             return jsonify({"ok": False, "error": "File not found"})

@@ -110,6 +110,8 @@ def increment_gemini_usage(user_id):
 def ask_gemini(question):
     model = genai.GenerativeModel('gemini-pro')
     response = model.generate_content(question)
+    if not response.candidates or not response.text:
+        raise ValueError("Gemini returned no text response (may have been blocked by safety filters)")
     return response.text
 
 

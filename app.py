@@ -108,7 +108,7 @@ def increment_gemini_usage(user_id):
 
 
 def ask_gemini(question):
-    model = genai.GenerativeModel('gemini-pro')
+    model = genai.GenerativeModel('gemini-1.5-flash')
     response = model.generate_content(question)
     return response.text
 

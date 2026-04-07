@@ -3,4 +3,4 @@ Flask==2.3.2
 pymongo[srv]==4.4.1
 gunicorn==21.2.0
 setuptools
-google-generativeai>=0.4.0
+openai

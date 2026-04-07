@@ -11,7 +11,7 @@ import uuid
 from bson.objectid import ObjectId
 from datetime import datetime, timezone
 from html import escape
-import google.generativeai as genai
+from openai import OpenAI
 
 # Environment Variables (Set these in Heroku Settings -> Config Vars)
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
@@ -25,15 +25,14 @@ FORCE_CHANNEL_ID = os.environ.get('FORCE_CHANNEL_ID')  # e.g., "-100123456789"
 FORCE_GROUP_ID = os.environ.get('FORCE_GROUP_ID')      # e.g., "-100987654321"
 FORCE_CHANNEL_URL = os.environ.get('FORCE_CHANNEL_URL')
 FORCE_GROUP_URL = os.environ.get('FORCE_GROUP_URL')
-GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
+OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
 _gemini_log_group = os.environ.get('GEMINI_LOG_GROUP_ID')
 GEMINI_LOG_GROUP_ID = (
     int(_gemini_log_group) if _gemini_log_group
     else (ADMIN_GROUP_ID or BACKUP_GROUP_ID)
 )
 
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
+openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
@@ -108,19 +107,11 @@ def increment_gemini_usage(user_id):
 
 
 def ask_gemini(question):
-    try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        response = model.generate_content(question)
-    except Exception as e:
-        if "404" in str(e):
-            try:
-                model = genai.GenerativeModel('gemini-pro')
-                response = model.generate_content(question)
-            except Exception as inner_e:
-                raise inner_e
-        else:
-            raise e
-    return response.text
+    response = openai_client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": question}]
+    )
+    return response.choices[0].message.content
 
 
 def log_gemini_chat(user_id, user_display, question, answer):
@@ -460,7 +451,7 @@ def ask_command(message):
         return
     if not enforce_subscription(message):
         return
-    if not GEMINI_API_KEY:
+    if not OPENAI_API_KEY:
         bot.reply_to(message, "⚠️ AI feature is not configured.")
         return
     parts = message.text.split(None, 1)
@@ -478,7 +469,7 @@ def ask_command(message):
     try:
         answer = ask_gemini(question)
     except Exception as e:
-        logging.error("Gemini error in /ask: %s", e)
+        logging.error("AI error in /ask: %s", e)
         err_text = "❌ Failed to get a response from AI. Please try again later."
         if slow_mode and sent_msg:
             bot.edit_message_text(err_text, message.chat.id, sent_msg.message_id)
@@ -1426,7 +1417,7 @@ def api_download():
 
 @app.route('/api/ask', methods=['POST'])
 def api_ask():
-    if not GEMINI_API_KEY:
+    if not OPENAI_API_KEY:
         return jsonify({"ok": False, "error": "AI feature is not configured"}), 503
     data = request.get_json(silent=True) or {}
     question = data.get('question', '').strip()
@@ -1449,7 +1440,7 @@ def api_ask():
     try:
         answer = ask_gemini(question)
     except Exception as e:
-        logging.error("Gemini API error in /api/ask: %s", e)
+        logging.error("AI API error in /api/ask: %s", e)
         return jsonify({"ok": False, "error": "Failed to get AI response"}), 500
     increment_gemini_usage(user_id)
     full_name = ' '.join(filter(None, [first_name, last_name])) or str(user_id)

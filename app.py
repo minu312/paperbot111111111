@@ -1,5 +1,6 @@
 import os
 import re
+import time
 import logging
 import telebot
 from telebot.types import InlineQueryResultCachedDocument, InlineKeyboardMarkup, InlineKeyboardButton
@@ -10,6 +11,7 @@ import uuid
 from bson.objectid import ObjectId
 from datetime import datetime, timezone
 from html import escape
+import google.generativeai as genai
 
 # Environment Variables (Set these in Heroku Settings -> Config Vars)
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
@@ -23,6 +25,15 @@ FORCE_CHANNEL_ID = os.environ.get('FORCE_CHANNEL_ID')  # e.g., "-100123456789"
 FORCE_GROUP_ID = os.environ.get('FORCE_GROUP_ID')      # e.g., "-100987654321"
 FORCE_CHANNEL_URL = os.environ.get('FORCE_CHANNEL_URL')
 FORCE_GROUP_URL = os.environ.get('FORCE_GROUP_URL')
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
+_gemini_log_group = os.environ.get('GEMINI_LOG_GROUP_ID')
+GEMINI_LOG_GROUP_ID = (
+    int(_gemini_log_group) if _gemini_log_group
+    else (ADMIN_GROUP_ID or BACKUP_GROUP_ID)
+)
+
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
 
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
@@ -36,6 +47,7 @@ files_col = db['files']
 history_col = db['history']
 messages_col = db['messages']
 admins_col = db['admins']
+gemini_usage_col = db['gemini_usage']
 
 # ================= FORCE SUBSCRIBE HELPERS =================
 
@@ -77,6 +89,44 @@ def enforce_subscription(message):
         reply_markup=markup
     )
     return False
+
+# ================= GEMINI AI HELPERS =================
+
+def get_gemini_daily_count(user_id):
+    date_str = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+    doc = gemini_usage_col.find_one({"user_id": user_id, "date": date_str})
+    return doc['count'] if doc else 0
+
+
+def increment_gemini_usage(user_id):
+    date_str = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+    gemini_usage_col.update_one(
+        {"user_id": user_id, "date": date_str},
+        {"$inc": {"count": 1}},
+        upsert=True
+    )
+
+
+def ask_gemini(question):
+    model = genai.GenerativeModel('gemini-pro')
+    response = model.generate_content(question)
+    return response.text
+
+
+def log_gemini_chat(user_id, user_display, question, answer):
+    if not GEMINI_LOG_GROUP_ID:
+        return
+    log_text = (
+        f"🤖 Gemini Chat Log\n"
+        f"User: {user_display} (ID: {user_id})\n"
+        f"Question: {question}\n"
+        f"Answer: {answer}"
+    )
+    try:
+        bot.send_message(GEMINI_LOG_GROUP_ID, log_text)
+    except Exception as e:
+        logging.error("Failed to send Gemini log: %s", e)
+
 
 # ================= TELEGRAM BOT LOGIC =================
 
@@ -393,6 +443,50 @@ def remove_file(message):
         bot.reply_to(message, f"✅ Successfully deleted {result.deleted_count} file(s) named '{query}'.")
     else:
         bot.reply_to(message, f"⚠️ No file found with the exact name '{query}'. Make sure to include any tutor tags if they exist.")
+
+@bot.message_handler(commands=['ask'])
+def ask_command(message):
+    if message.chat.type != 'private':
+        return
+    if not enforce_subscription(message):
+        return
+    if not GEMINI_API_KEY:
+        bot.reply_to(message, "⚠️ AI feature is not configured.")
+        return
+    parts = message.text.split(None, 1)
+    if len(parts) < 2 or not parts[1].strip():
+        bot.reply_to(message, "Usage: /ask <your question>")
+        return
+    question = parts[1].strip()
+    user = message.from_user
+    count = get_gemini_daily_count(user.id)
+    slow_mode = count > 30
+    sent_msg = None
+    if slow_mode:
+        sent_msg = bot.reply_to(message, "⏳ Slow mode active (daily limit exceeded). Please wait...")
+        time.sleep(20)
+    try:
+        answer = ask_gemini(question)
+    except Exception as e:
+        logging.error("Gemini error in /ask: %s", e)
+        err_text = "❌ Failed to get a response from AI. Please try again later."
+        if slow_mode and sent_msg:
+            bot.edit_message_text(err_text, message.chat.id, sent_msg.message_id)
+        else:
+            bot.reply_to(message, err_text)
+        return
+    increment_gemini_usage(user.id)
+    if slow_mode and sent_msg:
+        bot.edit_message_text(answer, message.chat.id, sent_msg.message_id)
+    else:
+        bot.reply_to(message, answer)
+    first = user.first_name or ""
+    last = user.last_name or ""
+    user_display = (first + " " + last).strip() or user.username or str(user.id)
+    if user.username:
+        user_display += f" (@{user.username})"
+    log_gemini_chat(user.id, user_display, question, answer)
+
 
 # Handler 1: When a user sends a text message (e.g., essay), return a list of matching files as buttons
 @bot.message_handler(func=lambda message: True, content_types=['text'])
@@ -901,6 +995,47 @@ MINIAPP_HTML = """
             text-decoration: none;
             margin: 5px;
         }
+        .ai-section {
+            padding: 8px 16px 14px;
+        }
+        .ai-input {
+            border-radius: 12px;
+            border: 2px solid #e2e8f0;
+            padding: 10px 16px;
+            font-size: 0.9rem;
+            resize: none;
+            transition: border-color 0.2s;
+        }
+        .ai-input:focus {
+            border-color: #7c3aed;
+            box-shadow: 0 0 0 3px rgba(124,58,237,0.12);
+            outline: none;
+        }
+        .ai-ask-btn {
+            border-radius: 12px;
+            background: #7c3aed;
+            border: none;
+            padding: 10px 16px;
+            color: white;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        .ai-ask-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        .ai-answer-box {
+            display: none;
+            background: #f5f3ff;
+            border: 1px solid #ddd6fe;
+            border-radius: 12px;
+            padding: 12px 14px;
+            margin-top: 10px;
+            font-size: 0.88rem;
+            color: #1e293b;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
     </style>
 </head>
 <body>
@@ -943,6 +1078,19 @@ MINIAPP_HTML = """
             </div>
             <span class="tutor-name">Sashanka<br>Danujaya</span>
         </button>
+    </div>
+
+    <!-- AI Chat Section -->
+    <div class="section-title">🤖 Ask Gemini AI</div>
+    <div class="ai-section">
+        <div class="input-group">
+            <textarea id="aiInput" class="form-control ai-input" rows="2"
+                      placeholder="Ask anything..." autocomplete="off"></textarea>
+            <button class="ai-ask-btn" id="aiAskBtn" onclick="doAskAI()">
+                <i class="bi bi-send-fill"></i>
+            </button>
+        </div>
+        <div id="aiAnswerBox" class="ai-answer-box"></div>
     </div>
 
     <!-- Results -->
@@ -1124,6 +1272,49 @@ MINIAPP_HTML = """
         document.getElementById('searchInput').addEventListener('keydown', function(e) {
             if (e.key === 'Enter') doSearch();
         });
+
+        function doAskAI() {
+            const q = document.getElementById('aiInput').value.trim();
+            if (!q) { showToast('Please enter a question.'); return; }
+            const btn = document.getElementById('aiAskBtn');
+            const answerBox = document.getElementById('aiAnswerBox');
+            btn.disabled = true;
+            answerBox.style.display = 'none';
+            answerBox.textContent = '';
+            let userId = null, username = '', firstName = '', lastName = '';
+            if (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) {
+                const user = tg.initDataUnsafe.user;
+                userId = user.id;
+                username = user.username || '';
+                firstName = user.first_name || '';
+                lastName = user.last_name || '';
+            }
+            if (!userId) {
+                showToast('⚠️ Open this app from Telegram to use AI.', 3000);
+                btn.disabled = false;
+                return;
+            }
+            showToast('🤖 Asking Gemini AI...', 25000);
+            fetch('/api/ask', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({question: q, user_id: userId, username: username, first_name: firstName, last_name: lastName})
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                btn.disabled = false;
+                if (data.ok) {
+                    answerBox.style.display = 'block';
+                    answerBox.textContent = data.answer;
+                } else {
+                    showToast('❌ ' + (data.error || 'Failed to get AI response.'), 3000);
+                }
+            })
+            .catch(function() {
+                btn.disabled = false;
+                showToast('❌ Network error. Please try again.', 3000);
+            });
+        }
     </script>
 </body>
 </html>
@@ -1221,6 +1412,42 @@ def api_download():
     except Exception as e:
         logging.error("API download error: %s", e)
         return jsonify({"ok": False, "error": "Failed to send file"})
+
+
+@app.route('/api/ask', methods=['POST'])
+def api_ask():
+    if not GEMINI_API_KEY:
+        return jsonify({"ok": False, "error": "AI feature is not configured"}), 503
+    data = request.get_json(silent=True) or {}
+    question = data.get('question', '').strip()
+    user_id = data.get('user_id')
+    username = data.get('username', '')
+    first_name = data.get('first_name', '')
+    last_name = data.get('last_name', '')
+    if not question:
+        return jsonify({"ok": False, "error": "No question provided"}), 400
+    if not user_id:
+        return jsonify({"ok": False, "error": "Missing user_id"}), 400
+    try:
+        user_id = int(user_id)
+    except (ValueError, TypeError):
+        return jsonify({"ok": False, "error": "Invalid user_id"}), 400
+    count = get_gemini_daily_count(user_id)
+    slow_mode = count > 30
+    if slow_mode:
+        time.sleep(20)
+    try:
+        answer = ask_gemini(question)
+    except Exception as e:
+        logging.error("Gemini API error in /api/ask: %s", e)
+        return jsonify({"ok": False, "error": "Failed to get AI response"}), 500
+    increment_gemini_usage(user_id)
+    full_name = ' '.join(filter(None, [first_name, last_name])) or str(user_id)
+    user_display = full_name
+    if username:
+        user_display += f" (@{username})"
+    log_gemini_chat(user_id, user_display, question, answer)
+    return jsonify({"ok": True, "answer": answer, "slow_mode": slow_mode})
 
 
 if __name__ == '__main__':

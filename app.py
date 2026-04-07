@@ -1049,9 +1049,9 @@ MINIAPP_HTML = """
 
 @app.route('/miniapp')
 def miniapp():
-    ap_img = 'https://drive.google.com/uc?export=view&id=1ao9d6u3tBeSn7o_1gccgNvSxtIEZa1iU'
-    ad_img = 'https://drive.google.com/uc?export=view&id=1VQT4p_r5vOgN7SAlaz6b4eR37X_YDdGP'
-    sd_img = 'https://drive.google.com/uc?export=view&id=1xnmIHUO6o-qJKnv8DR3X8xIzcvB5U7GJ'
+    ap_img = url_for('static', filename='ap.jpg')
+    ad_img = url_for('static', filename='ad.jpg')
+    sd_img = url_for('static', filename='sd.jpg')
     return render_template_string(MINIAPP_HTML, ap_img=ap_img, ad_img=ad_img, sd_img=sd_img)
 
 

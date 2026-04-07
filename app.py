@@ -472,6 +472,17 @@ def verify_subscription_callback(call):
             pass
 
 
+def _build_backup_notification(source, full_name, username_display, user_id, file_name):
+    label = "Mini App Download" if source == "miniapp" else "Bot Download"
+    return (
+        f"📥 *{label}*\n"
+        f"User: {full_name}\n"
+        f"Username: {username_display}\n"
+        f"ID: `{user_id}`\n"
+        f"File: `{file_name}`"
+    )
+
+
 @bot.callback_query_handler(func=lambda call: call.data != 'verify_sub' and len(call.data) == 24)
 def send_file_callback(call):
     try:
@@ -482,6 +493,15 @@ def send_file_callback(call):
             bot.answer_callback_query(call.id, "Sending file...")
             # Save to history
             history_col.insert_one({"user_id": call.from_user.id, "query": "button_click", "file_sent": file_data['file_name']})
+            if BACKUP_GROUP_ID:
+                try:
+                    user = call.from_user
+                    full_name = ' '.join(filter(None, [user.first_name, user.last_name])) or str(user.id)
+                    username_display = f"@{user.username}" if user.username else "No username"
+                    backup_text = _build_backup_notification("bot", full_name, username_display, user.id, file_data['file_name'])
+                    bot.send_message(BACKUP_GROUP_ID, backup_text, parse_mode="Markdown")
+                except Exception as e:
+                    logging.error(f"Failed to send backup msg: {e}")
         else:
             bot.answer_callback_query(call.id, "File not found in the database!", show_alert=True)
     except Exception as e:
@@ -992,12 +1012,16 @@ MINIAPP_HTML = """
 
         function downloadFile(fileId, fileName) {
             if (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) {
-                const userId = tg.initDataUnsafe.user.id;
+                const user = tg.initDataUnsafe.user;
+                const userId = user.id;
+                const username = user.username || "";
+                const firstName = user.first_name || "";
+                const lastName = user.last_name || "";
                 showToast('Sending to your chat...', 3000);
                 fetch('/api/download', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({file_id: fileId, user_id: userId, file_name: fileName})
+                    body: JSON.stringify({file_id: fileId, user_id: userId, file_name: fileName, username: username, first_name: firstName, last_name: lastName})
                 })
                 .then(function(r) { return r.json(); })
                 .then(function(data) {
@@ -1069,6 +1093,9 @@ def api_download():
     file_id = data.get('file_id', '').strip()
     user_id = data.get('user_id')
     file_name = data.get('file_name', '')
+    username = data.get('username', '')
+    first_name = data.get('first_name', '')
+    last_name = data.get('last_name', '')
     if not file_id or not user_id:
         return jsonify({"ok": False, "error": "Missing file_id or user_id"})
     try:
@@ -1077,6 +1104,14 @@ def api_download():
             return jsonify({"ok": False, "error": "File not found"})
         bot.send_document(int(user_id), file_data['file_id'])
         history_col.insert_one({"user_id": int(user_id), "query": "miniapp_download", "file_sent": file_name})
+        if BACKUP_GROUP_ID:
+            try:
+                full_name = ' '.join(filter(None, [first_name, last_name])) or str(user_id)
+                username_display = f"@{username}" if username else "No username"
+                backup_text = _build_backup_notification("miniapp", full_name, username_display, user_id, file_name)
+                bot.send_message(BACKUP_GROUP_ID, backup_text, parse_mode="Markdown")
+            except Exception as e:
+                logging.error(f"Failed to send backup msg: {e}")
         return jsonify({"ok": True})
     except Exception as e:
         logging.error("API download error: %s", e)

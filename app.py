@@ -3,7 +3,7 @@ import re
 import logging
 import telebot
 from telebot.types import InlineQueryResultCachedDocument, InlineKeyboardMarkup, InlineKeyboardButton
-from flask import Flask, request, render_template_string
+from flask import Flask, request, render_template_string, jsonify, send_from_directory, url_for
 from pymongo import MongoClient
 from pymongo.errors import PyMongoError
 import uuid
@@ -121,6 +121,24 @@ def help_command(message):
         "Just type your search keyword below to get started!"
     )
     bot.reply_to(message, help_text, parse_mode='Markdown')
+
+@bot.message_handler(commands=['app'])
+def open_app(message):
+    if message.chat.type != 'private':
+        return
+    if not enforce_subscription(message):
+        return
+    if not URL:
+        bot.reply_to(message, "⚠️ Mini App URL is not configured.")
+        return
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("📚 Open PaperBot App", web_app=telebot.types.WebAppInfo(url=f"{URL}/miniapp")))
+    bot.send_message(
+        message.chat.id,
+        "🎓 *PaperBot Mini App*\n\nSearch and download past papers directly from the app!",
+        reply_markup=markup,
+        parse_mode='Markdown'
+    )
 
 @bot.message_handler(commands=['contact'])
 def contact(message):
@@ -640,6 +658,430 @@ def messages_page():
     </html>
     """
     return render_template_string(html)
+
+# ================= TELEGRAM MINI APP =================
+
+MINIAPP_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>PaperBot - Past Papers</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
+    <style>
+        :root {
+            --tg-bg: #f5f7fa;
+            --tg-accent: #2563eb;
+            --tg-card: #ffffff;
+        }
+        body {
+            background: var(--tg-bg);
+            font-family: 'Segoe UI', sans-serif;
+            min-height: 100vh;
+            padding-bottom: 20px;
+        }
+        .app-header {
+            background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%);
+            color: white;
+            padding: 18px 16px 14px;
+            text-align: center;
+        }
+        .app-header h1 {
+            font-size: 1.3rem;
+            font-weight: 700;
+            margin: 0;
+        }
+        .app-header p {
+            font-size: 0.8rem;
+            margin: 4px 0 0;
+            opacity: 0.85;
+        }
+        .search-section {
+            padding: 14px 16px;
+        }
+        .search-bar {
+            border-radius: 12px;
+            border: 2px solid #e2e8f0;
+            padding: 10px 16px;
+            font-size: 0.95rem;
+            transition: border-color 0.2s;
+        }
+        .search-bar:focus {
+            border-color: var(--tg-accent);
+            box-shadow: 0 0 0 3px rgba(37,99,235,0.12);
+            outline: none;
+        }
+        .search-btn {
+            border-radius: 12px;
+            background: var(--tg-accent);
+            border: none;
+            padding: 10px 16px;
+            color: white;
+            font-weight: 600;
+        }
+        .section-title {
+            font-size: 0.85rem;
+            font-weight: 700;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            padding: 8px 16px 4px;
+        }
+        /* Square tutor button styles */
+        .tutors-grid {
+            display: flex;
+            gap: 12px;
+            padding: 8px 16px 12px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        .tutor-btn {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            cursor: pointer;
+            border: none;
+            background: transparent;
+            padding: 0;
+            flex: 0 0 calc(33% - 10px);
+            max-width: 110px;
+        }
+        .tutor-btn:active .tutor-img-wrap {
+            transform: scale(0.95);
+        }
+        .tutor-img-wrap {
+            width: 100%;
+            aspect-ratio: 1 / 1;
+            border-radius: 12px;
+            overflow: hidden;
+            border: 3px solid transparent;
+            background: #e2e8f0;
+            transition: border-color 0.2s, transform 0.15s;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.10);
+        }
+        .tutor-btn.active .tutor-img-wrap,
+        .tutor-btn:hover .tutor-img-wrap {
+            border-color: var(--tg-accent);
+            box-shadow: 0 4px 14px rgba(37,99,235,0.25);
+        }
+        .tutor-img-wrap img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+        .tutor-name {
+            margin-top: 6px;
+            font-size: 0.72rem;
+            font-weight: 600;
+            color: #1e3a8a;
+            text-align: center;
+            line-height: 1.3;
+        }
+        /* Results section */
+        .results-section {
+            padding: 0 16px;
+        }
+        .result-card {
+            background: var(--tg-card);
+            border-radius: 12px;
+            padding: 12px 14px;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+            border: 1px solid #e2e8f0;
+        }
+        .result-name {
+            font-size: 0.88rem;
+            font-weight: 500;
+            color: #1e293b;
+            flex: 1;
+            margin-right: 10px;
+            word-break: break-word;
+        }
+        .download-btn {
+            background: var(--tg-accent);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 6px 12px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            white-space: nowrap;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .download-btn:hover {
+            background: #1d4ed8;
+        }
+        .empty-state {
+            text-align: center;
+            padding: 30px 20px;
+            color: #94a3b8;
+        }
+        .empty-state i {
+            font-size: 2.5rem;
+            display: block;
+            margin-bottom: 8px;
+        }
+        .loading-spinner {
+            display: none;
+            text-align: center;
+            padding: 20px;
+        }
+        .toast-msg {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #1e293b;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            z-index: 9999;
+            display: none;
+            white-space: nowrap;
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <div class="app-header">
+        <h1>📚 PaperBot</h1>
+        <p>Find & Download Past Papers Instantly</p>
+    </div>
+
+    <!-- Search -->
+    <div class="search-section">
+        <div class="input-group">
+            <input type="text" id="searchInput" class="form-control search-bar"
+                   placeholder="Search papers (e.g. ap s2 paper 01)..."
+                   autocomplete="off" autocorrect="off" spellcheck="false">
+            <button class="search-btn" onclick="doSearch()">
+                <i class="bi bi-search"></i>
+            </button>
+        </div>
+    </div>
+
+    <!-- Tutors section -->
+    <div class="section-title">Browse by Tutor</div>
+    <div class="tutors-grid">
+        <button class="tutor-btn" id="btn-ap" onclick="loadByTutor('ap', 'btn-ap')">
+            <div class="tutor-img-wrap">
+                <img src="{{ ap_img }}" alt="Anuradha Perera" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22200%22><rect width=%22200%22 height=%22200%22 fill=%22%234f86c6%22/><text x=%2250%%25%22 y=%2250%%25%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2260%22>AP</text></svg>'">
+            </div>
+            <span class="tutor-name">Anuradha<br>Perera</span>
+        </button>
+        <button class="tutor-btn" id="btn-ad" onclick="loadByTutor('ad', 'btn-ad')">
+            <div class="tutor-img-wrap">
+                <img src="{{ ad_img }}" alt="Amila Dasanayaka" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22200%22><rect width=%22200%22 height=%22200%22 fill=%22%2243a87c%22/><text x=%2250%%25%22 y=%2250%%25%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2260%22>AD</text></svg>'">
+            </div>
+            <span class="tutor-name">Amila<br>Dasanayaka</span>
+        </button>
+        <button class="tutor-btn" id="btn-sd" onclick="loadByTutor('sd', 'btn-sd')">
+            <div class="tutor-img-wrap">
+                <img src="{{ sd_img }}" alt="Sashanka Danujaya" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22200%22><rect width=%22200%22 height=%22200%22 fill=%22%23e8760a%22/><text x=%2250%%25%22 y=%2250%%25%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2260%22>SD</text></svg>'">
+            </div>
+            <span class="tutor-name">Sashanka<br>Danujaya</span>
+        </button>
+    </div>
+
+    <!-- Results -->
+    <div class="section-title" id="resultsTitle" style="display:none;">Results</div>
+    <div class="loading-spinner" id="loadingSpinner">
+        <div class="spinner-border text-primary" role="status"></div>
+    </div>
+    <div class="results-section" id="resultsContainer">
+        <div class="empty-state">
+            <i class="bi bi-search"></i>
+            <p>Search for papers above or tap a tutor to browse their papers.</p>
+        </div>
+    </div>
+
+    <!-- Toast notification -->
+    <div class="toast-msg" id="toastMsg"></div>
+
+    <script>
+        // Init Telegram WebApp
+        const tg = window.Telegram && window.Telegram.WebApp;
+        if (tg) {
+            tg.ready();
+            tg.expand();
+            document.body.style.background = tg.themeParams.bg_color || '#f5f7fa';
+        }
+
+        let currentTag = null;
+
+        function showToast(msg, dur) {
+            const t = document.getElementById('toastMsg');
+            t.textContent = msg;
+            t.style.display = 'block';
+            setTimeout(() => { t.style.display = 'none'; }, dur || 2000);
+        }
+
+        function setLoading(show) {
+            document.getElementById('loadingSpinner').style.display = show ? 'block' : 'none';
+        }
+
+        function renderResults(files, emptyMsg) {
+            const container = document.getElementById('resultsContainer');
+            const title = document.getElementById('resultsTitle');
+            if (!files || files.length === 0) {
+                title.style.display = 'none';
+                container.innerHTML = '<div class="empty-state"><i class="bi bi-inbox"></i><p>' + (emptyMsg || 'No papers found.') + '</p></div>';
+                return;
+            }
+            title.style.display = 'block';
+            container.innerHTML = files.map(function(f) {
+                return '<div class="result-card">'
+                    + '<span class="result-name"><i class="bi bi-file-earmark-pdf-fill text-danger me-2"></i>' + escapeHtml(f.file_name) + '</span>'
+                    + '<button class="download-btn" onclick="downloadFile(' + JSON.stringify(f.id) + ', ' + JSON.stringify(f.file_name) + ')"><i class="bi bi-download"></i> Get</button>'
+                    + '</div>';
+            }).join('');
+        }
+
+        function escapeHtml(str) {
+            return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        }
+
+        function doSearch() {
+            const q = document.getElementById('searchInput').value.trim();
+            if (!q) { showToast('Please enter a search keyword.'); return; }
+            // Deactivate tutor buttons
+            document.querySelectorAll('.tutor-btn').forEach(function(b) { b.classList.remove('active'); });
+            currentTag = null;
+            setLoading(true);
+            fetch('/api/search?q=' + encodeURIComponent(q))
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    setLoading(false);
+                    renderResults(data.files, 'No papers found for "' + escapeHtml(q) + '".');
+                })
+                .catch(function() { setLoading(false); showToast('Search failed. Please try again.'); });
+        }
+
+        function loadByTutor(tag, btnId) {
+            // Toggle: clicking the same active tutor clears results
+            if (currentTag === tag) {
+                currentTag = null;
+                document.getElementById(btnId).classList.remove('active');
+                document.getElementById('resultsTitle').style.display = 'none';
+                document.getElementById('resultsContainer').innerHTML = '<div class="empty-state"><i class="bi bi-search"></i><p>Search for papers above or tap a tutor to browse their papers.</p></div>';
+                return;
+            }
+            currentTag = tag;
+            document.querySelectorAll('.tutor-btn').forEach(function(b) { b.classList.remove('active'); });
+            document.getElementById(btnId).classList.add('active');
+            document.getElementById('searchInput').value = '';
+            setLoading(true);
+            fetch('/api/tutors?tag=' + encodeURIComponent(tag))
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    setLoading(false);
+                    const names = {'ap': 'Anuradha Perera', 'ad': 'Amila Dasanayaka', 'sd': 'Sashanka Danujaya'};
+                    renderResults(data.files, 'No papers found for ' + (names[tag] || tag) + '.');
+                })
+                .catch(function() { setLoading(false); showToast('Failed to load papers. Please try again.'); });
+        }
+
+        function downloadFile(fileId, fileName) {
+            if (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) {
+                const userId = tg.initDataUnsafe.user.id;
+                showToast('Sending to your chat...', 3000);
+                fetch('/api/download', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({file_id: fileId, user_id: userId, file_name: fileName})
+                })
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    if (data.ok) {
+                        showToast('✅ Sent to your Telegram chat!', 3000);
+                    } else {
+                        showToast('❌ Failed to send. Please try again.', 3000);
+                    }
+                })
+                .catch(function() { showToast('❌ Network error. Please try again.', 3000); });
+            } else {
+                showToast('⚠️ Open this app from Telegram to download files.', 3000);
+            }
+        }
+
+        // Allow pressing Enter in search box
+        document.getElementById('searchInput').addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') doSearch();
+        });
+    </script>
+</body>
+</html>
+"""
+
+
+@app.route('/miniapp')
+def miniapp():
+    ap_img = url_for('static', filename='ap.jpg')
+    ad_img = url_for('static', filename='ad.jpg')
+    sd_img = url_for('static', filename='sd.jpg')
+    return render_template_string(MINIAPP_HTML, ap_img=ap_img, ad_img=ad_img, sd_img=sd_img)
+
+
+@app.route('/api/search')
+def api_search():
+    q = request.args.get('q', '').strip().lower()
+    if not q:
+        return jsonify({"files": [], "error": "No query provided"})
+    try:
+        results = list(files_col.find(
+            {"file_name": {"$regex": re.escape(q), "$options": "i"}}
+        ).limit(20))
+        files = [{"id": str(f['_id']), "file_name": f['file_name']} for f in results]
+        return jsonify({"files": files})
+    except Exception as e:
+        logging.error("API search error: %s", e)
+        return jsonify({"files": [], "error": "Database error"}), 500
+
+
+@app.route('/api/tutors')
+def api_tutors():
+    tag = request.args.get('tag', '').strip().lower()
+    if tag not in ('ap', 'ad', 'sd'):
+        return jsonify({"files": [], "error": "Invalid tag"})
+    try:
+        results = list(files_col.find(
+            {"file_name": {"$regex": re.escape(tag), "$options": "i"}}
+        ).limit(50))
+        files = [{"id": str(f['_id']), "file_name": f['file_name']} for f in results]
+        return jsonify({"files": files})
+    except Exception as e:
+        logging.error("API tutors error: %s", e)
+        return jsonify({"files": [], "error": "Database error"}), 500
+
+
+@app.route('/api/download', methods=['POST'])
+def api_download():
+    data = request.get_json(silent=True) or {}
+    file_id = data.get('file_id', '').strip()
+    user_id = data.get('user_id')
+    file_name = data.get('file_name', '')
+    if not file_id or not user_id:
+        return jsonify({"ok": False, "error": "Missing file_id or user_id"})
+    try:
+        file_data = files_col.find_one({"_id": ObjectId(file_id)})
+        if not file_data:
+            return jsonify({"ok": False, "error": "File not found"})
+        bot.send_document(int(user_id), file_data['file_id'])
+        history_col.insert_one({"user_id": int(user_id), "query": "miniapp_download", "file_sent": file_name})
+        return jsonify({"ok": True})
+    except Exception as e:
+        logging.error("API download error: %s", e)
+        return jsonify({"ok": False, "error": "Failed to send file"})
+
 
 if __name__ == '__main__':
     bot.remove_webhook()

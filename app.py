@@ -941,7 +941,7 @@ MINIAPP_HTML = """
             container.innerHTML = files.map(function(f) {
                 return '<div class="result-card">'
                     + '<span class="result-name"><i class="bi bi-file-earmark-pdf-fill text-danger me-2"></i>' + escapeHtml(f.file_name) + '</span>'
-                    + '<button class="download-btn" onclick="downloadFile(' + JSON.stringify(f.id) + ', ' + JSON.stringify(f.file_name) + ')"><i class="bi bi-download"></i> Get</button>'
+                    + '<button class="download-btn" onclick=\\'downloadFile(' + JSON.stringify(f.id) + ', ' + JSON.stringify(f.file_name).replace(/'/g, "&#39;") + ')\\'><i class="bi bi-download"></i> Get</button>'
                     + '</div>';
             }).join('');
         }

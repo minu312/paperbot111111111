@@ -37,6 +37,15 @@ messages_col = db['messages']
 admins_col = db['admins']
 
 
+# ================= QUERY HELPERS =================
+
+def normalize_query(q):
+    """Pad lone single digits (1-9) with a leading zero so that
+    'full paper 1' matches 'full paper 01', 'mcq 3' matches 'mcq 03', etc.
+    Multi-digit numbers like '10', '01', or '2022' are left unchanged."""
+    return re.sub(r'\b([1-9])\b', r'0\1', q)
+
+
 # ================= FORCE SUBSCRIBE HELPERS =================
 
 def get_subscription_status(user_id):
@@ -405,7 +414,7 @@ def search_files_text(message):
     if message.text.startswith('/'):
         return
         
-    query = message.text.lower()
+    query = normalize_query(message.text.lower())
     user = message.from_user
     # Save the message to the messages collection
     messages_col.insert_one({
@@ -511,7 +520,7 @@ def send_file_callback(call):
 # Legacy inline search handler (also available for inline queries)
 @bot.inline_handler(lambda query: len(query.query) > 0)
 def query_text(inline_query):
-    query = inline_query.query.lower()
+    query = normalize_query(inline_query.query.lower())
     results = files_col.find({"file_name": {"$regex": query}}).limit(10)
     
     inline_results = []
@@ -1141,7 +1150,7 @@ def miniapp():
 
 @app.route('/api/search')
 def api_search():
-    q = request.args.get('q', '').strip().lower()
+    q = normalize_query(request.args.get('q', '').strip().lower())
     if not q:
         return jsonify({"files": [], "error": "No query provided"})
     try:

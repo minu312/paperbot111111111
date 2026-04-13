@@ -435,6 +435,18 @@ def search_files_text(message):
         except Exception:
             pass
 
+    # Detect generic category phrases and prompt the user to include a paper number
+    generic_category_pattern = re.compile(
+        r'^(ad|ap)\s+full\s+papers?$', re.IGNORECASE
+    )
+    if generic_category_pattern.match(message.text.strip()):
+        bot.reply_to(
+            message,
+            "Please send the paper you want.\nEg: `ap full paper 1`",
+            parse_mode='Markdown'
+        )
+        return
+
     # Search the database for files matching the query (up to 10 results)
     results = list(files_col.find({"file_name": {"$regex": query}}).limit(10))
     

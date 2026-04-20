@@ -3,13 +3,15 @@ import re
 import logging
 import telebot
 from telebot.types import InlineQueryResultCachedDocument, InlineKeyboardMarkup, InlineKeyboardButton
-from flask import Flask, request, render_template_string, jsonify, send_from_directory, url_for
+from flask import Flask, request, render_template_string, jsonify, send_from_directory, url_for, Response
 from pymongo import MongoClient
 from pymongo.errors import PyMongoError
 import uuid
 from bson.objectid import ObjectId
 from datetime import datetime, timezone
 from html import escape
+from urllib.parse import urlparse
+from urllib.request import urlopen
 # Environment Variables (Set these in Heroku Settings -> Config Vars)
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 ADMIN_ID = int(os.environ.get('ADMIN_ID', 0))
@@ -22,6 +24,9 @@ FORCE_CHANNEL_ID = os.environ.get('FORCE_CHANNEL_ID')  # e.g., "-100123456789"
 FORCE_GROUP_ID = os.environ.get('FORCE_GROUP_ID')      # e.g., "-100987654321"
 FORCE_CHANNEL_URL = os.environ.get('FORCE_CHANNEL_URL')
 FORCE_GROUP_URL = os.environ.get('FORCE_GROUP_URL')
+ADMIN_CHANNEL_ID = os.environ.get('ADMIN_CHANNEL_ID')
+DISCUSSION_2025_MSG_ID = os.environ.get('DISCUSSION_2025_MSG_ID', '')
+DISCUSSION_2026_MSG_ID = os.environ.get('DISCUSSION_2026_MSG_ID', '')
 
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
@@ -35,6 +40,13 @@ files_col = db['files']
 history_col = db['history']
 messages_col = db['messages']
 admins_col = db['admins']
+tutor_buttons_col = db['tutor_buttons']
+
+DEFAULT_TUTOR_BUTTONS = [
+    {"name": "Anuradha Perera", "search_tag": "ap", "image_url": "/static/ap.jpg"},
+    {"name": "Amila Dasanayaka", "search_tag": "ad", "image_url": "/static/ad.jpg"},
+    {"name": "Sashanka Danujaya", "search_tag": "sd", "image_url": "/static/sd.jpg"},
+]
 
 
 # ================= QUERY HELPERS =================
@@ -44,6 +56,102 @@ def normalize_query(q):
     'full paper 1' matches 'full paper 01', 'mcq 3' matches 'mcq 03', etc.
     Multi-digit numbers like '10', '01', or '2022' are left unchanged."""
     return re.sub(r'\b([1-9])\b', r'0\1', q)
+
+
+def is_admin_or_subadmin(user_id):
+    return user_id == ADMIN_ID or admins_col.count_documents({"user_id": user_id}, limit=1) > 0
+
+
+def build_miniapp_markup():
+    if not URL:
+        return None
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("📚 Open PaperBot App", web_app=telebot.types.WebAppInfo(url=f"{URL}/miniapp")))
+    return markup
+
+
+def tutor_search_tag_from_name(name):
+    words = [w for w in re.split(r'\s+', name.strip().lower()) if w]
+    if not words:
+        return ""
+    if len(words) == 1:
+        return words[0]
+    return ''.join(w[0] for w in words[:3])
+
+
+def tutor_key(name):
+    return re.sub(r'\s+', ' ', name.strip().lower())
+
+
+def get_tutor_buttons():
+    tutors = []
+    try:
+        for t in tutor_buttons_col.find({}, {"_id": 1, "name": 1, "search_tag": 1, "image_file_id": 1, "image_url": 1}).sort("name", 1):
+            image_url = t.get("image_url") or ""
+            if not image_url and t.get("image_file_id"):
+                image_url = f"/api/tutor-image/{str(t['_id'])}"
+            tutors.append({
+                "id": str(t["_id"]),
+                "name": t.get("name", ""),
+                "search_tag": t.get("search_tag", ""),
+                "image_url": image_url
+            })
+    except Exception as e:
+        logging.error("Failed to load tutor buttons: %s", e)
+    return tutors or DEFAULT_TUTOR_BUTTONS
+
+
+def _extract_msg_id_from_token(token):
+    cleaned = token.strip()
+    if not cleaned:
+        return None
+    if cleaned.lstrip('-').isdigit():
+        return int(cleaned)
+    try:
+        parsed = urlparse(cleaned)
+    except Exception:
+        return None
+    path_parts = [p for p in parsed.path.split('/') if p]
+    if path_parts and path_parts[-1].isdigit():
+        return int(path_parts[-1])
+    return None
+
+
+def send_discussion_messages(target_chat_id, year):
+    refs_by_year = {"2025": DISCUSSION_2025_MSG_ID, "2026": DISCUSSION_2026_MSG_ID}
+    raw_refs = refs_by_year.get(str(year), "")
+    tokens = [t for t in re.split(r'[\s,]+', raw_refs.strip()) if t]
+    if not tokens:
+        return False, "⚠️ Discussion messages are not configured for this year yet."
+
+    sent_any = False
+    admin_channel = int(ADMIN_CHANNEL_ID) if ADMIN_CHANNEL_ID and str(ADMIN_CHANNEL_ID).lstrip('-').isdigit() else None
+    for token in tokens:
+        msg_id = _extract_msg_id_from_token(token)
+        if msg_id is not None and admin_channel:
+            try:
+                bot.forward_message(target_chat_id, admin_channel, msg_id)
+                sent_any = True
+                continue
+            except Exception as e:
+                logging.error("Failed forwarding discussion message %s for %s: %s", msg_id, year, e)
+        if token.startswith("http://") or token.startswith("https://"):
+            bot.send_message(target_chat_id, token)
+            sent_any = True
+
+    if sent_any:
+        return True, ""
+    return False, "⚠️ Failed to send discussion materials. Please contact admin."
+
+
+def send_discussion_year_buttons(chat_id, reply_to_message_id=None):
+    markup = InlineKeyboardMarkup()
+    markup.row_width = 2
+    markup.add(
+        InlineKeyboardButton("2025", callback_data="discussion_year:2025"),
+        InlineKeyboardButton("2026", callback_data="discussion_year:2026")
+    )
+    bot.send_message(chat_id, "Please choose a discussion year:", reply_markup=markup, reply_to_message_id=reply_to_message_id)
 
 
 # ================= FORCE SUBSCRIBE HELPERS =================
@@ -98,17 +206,17 @@ def start(message):
     user_id = message.from_user.id
     if not users_col.find_one({"user_id": user_id}):
         users_col.insert_one({"user_id": user_id, "username": message.from_user.username})
+    first_name = message.from_user.first_name or "there"
     welcome_text = (
-        "🤖 **Welcome to Lᵉᵃʳᶯ -X - PaperBot!**\n\n"
-        "The ultimate place to find your past papers and study materials.\n\n"
-        "🔍 **How to search:**\n"
-        "Just type the name of the paper, subject, or Teacher (e.g:- `ad s2 paper 01`) and send it to me as a normal message.\n\n"
-        "📩 **Contact Admin:**\n"
-        "If you need help or want to request a paper, use the `/contact` command followed by your message.\n"
-        "*Example:* `/contact Please add the AP Full Paper 09.`\n\n"
-        "Just type your search keyword below to get started! 👇"
+        f"👋 Hello {first_name},\n\n"
+        "Welcome to Learn-X PaperBot 📚✨\n\n"
+        "You can search for past papers and study materials by typing the subject, paper name, or teacher (e.g. AD S2 Paper 01).\n"
+        "Simply type a keyword here or use our mini app to find what you need quickly ⚡️\n\n"
+        "If you need assistance or would like to request a paper, simply use the /contact command followed by your message 💬\n\n"
+        "🔐 To get full access, please complete the verification using the buttons below.\n\n"
+        "Go ahead and start your search below 👇"
     )
-    bot.reply_to(message, welcome_text, parse_mode='Markdown')
+    bot.reply_to(message, welcome_text)
 
 @bot.message_handler(commands=['help'])
 def help_command(message):
@@ -140,8 +248,7 @@ def open_app(message):
     if not URL:
         bot.reply_to(message, "⚠️ Mini App URL is not configured.")
         return
-    markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("📚 Open PaperBot App", web_app=telebot.types.WebAppInfo(url=f"{URL}/miniapp")))
+    markup = build_miniapp_markup()
     bot.send_message(
         message.chat.id,
         "🎓 *PaperBot Mini App*\n\nSearch and download past papers directly from the app!",
@@ -223,6 +330,72 @@ def remove_admin(message):
         bot.reply_to(message, f"✅ User {rm_admin_id} has been removed from sub-admins.")
     else:
         bot.reply_to(message, f"ℹ️ User {rm_admin_id} was not found in sub-admins.")
+
+
+@bot.message_handler(func=lambda message: (message.text or message.caption or '').strip().lower().startswith('/addbutton'), content_types=['text', 'photo'])
+def add_tutor_button(message):
+    if message.chat.type != 'private':
+        return
+    if not is_admin_or_subadmin(message.from_user.id):
+        return
+    command_text = (message.text or message.caption or '').strip()
+    parts = command_text.split(None, 1)
+    if len(parts) < 2 or not parts[1].strip():
+        bot.reply_to(message, "Usage: /addbutton <Tutor Name> (attach a photo optionally)")
+        return
+
+    tutor_name = parts[1].strip()
+    search_tag = tutor_search_tag_from_name(tutor_name)
+    if not search_tag:
+        bot.reply_to(message, "⚠️ Invalid tutor name.")
+        return
+
+    image_file_id = None
+    if getattr(message, 'photo', None):
+        image_file_id = message.photo[-1].file_id
+
+    update = {
+        "name": tutor_name,
+        "name_key": tutor_key(tutor_name),
+        "search_tag": search_tag
+    }
+    if image_file_id:
+        update["image_file_id"] = image_file_id
+        update["image_url"] = ""
+
+    try:
+        tutor_buttons_col.update_one(
+            {"name_key": tutor_key(tutor_name)},
+            {"$set": update, "$setOnInsert": {"created_at": datetime.now(timezone.utc)}},
+            upsert=True
+        )
+        bot.reply_to(message, f"✅ Tutor button saved: {tutor_name}")
+    except Exception as e:
+        logging.error("Failed to save tutor button '%s': %s", tutor_name, e)
+        bot.reply_to(message, "⚠️ Failed to save tutor button. Please try again.")
+
+
+@bot.message_handler(commands=['removebutton'])
+def remove_tutor_button(message):
+    if message.chat.type != 'private':
+        return
+    if not is_admin_or_subadmin(message.from_user.id):
+        return
+    parts = message.text.split(None, 1)
+    if len(parts) < 2 or not parts[1].strip():
+        bot.reply_to(message, "Usage: /removebutton <Tutor Name>")
+        return
+    name = parts[1].strip()
+    try:
+        result = tutor_buttons_col.delete_one({"name_key": tutor_key(name)})
+        if result.deleted_count:
+            bot.reply_to(message, f"✅ Tutor button removed: {name}")
+        else:
+            bot.reply_to(message, f"⚠️ Tutor button not found: {name}")
+    except Exception as e:
+        logging.error("Failed to remove tutor button '%s': %s", name, e)
+        bot.reply_to(message, "⚠️ Failed to remove tutor button. Please try again.")
+
 
 def _forward_user_submission(message, file_name=None):
     """Forward a user's file/media submission to OTHERS_GROUP_ID with an info caption."""
@@ -435,6 +608,31 @@ def search_files_text(message):
         except Exception:
             pass
 
+    lower_text = message.text.strip().lower()
+
+    if lower_text == "past papers":
+        markup = build_miniapp_markup()
+        bot.reply_to(message, "use our mini app 👈", reply_markup=markup)
+        return
+
+    if re.fullmatch(r"p(?:a|e)?p{1,2}e?r?s?", lower_text):
+        bot.reply_to(
+            message,
+            "Please send the paper you want.\nEg: `ap full paper 1` or `ad full paper 1`",
+            parse_mode='Markdown'
+        )
+        return
+
+    if re.search(r'\bdiscussions?\b', lower_text):
+        year_match = re.search(r'\b(2025|2026)\b', lower_text)
+        if year_match:
+            ok, err = send_discussion_messages(message.chat.id, year_match.group(1))
+            if not ok:
+                bot.reply_to(message, err)
+        else:
+            send_discussion_year_buttons(message.chat.id, reply_to_message_id=message.message_id)
+        return
+
     # Detect generic category phrases and prompt the user to include a paper number
     generic_category_pattern = re.compile(
         r'^(ad|ap)\s+full\s+papers?$', re.IGNORECASE
@@ -492,6 +690,20 @@ def verify_subscription_callback(call):
             bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=markup)
         except Exception:
             pass
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('discussion_year:'))
+def discussion_year_callback(call):
+    year = call.data.split(':', 1)[1] if ':' in call.data else ""
+    if year not in ("2025", "2026"):
+        bot.answer_callback_query(call.id, "Invalid year", show_alert=True)
+        return
+    ok, err = send_discussion_messages(call.message.chat.id, year)
+    if ok:
+        bot.answer_callback_query(call.id, f"Sending {year} discussions...")
+    else:
+        bot.answer_callback_query(call.id, "Failed to send discussions", show_alert=True)
+        bot.send_message(call.message.chat.id, err)
 
 
 def _build_backup_notification(source, full_name, username_display, user_id, file_name):
@@ -946,25 +1158,12 @@ MINIAPP_HTML = """
 
     <!-- Tutors section -->
     <div class="section-title">Browse by Tutor</div>
+    <div class="tutors-grid" id="tutorsGrid"></div>
+
+    <div class="section-title">Discussions</div>
     <div class="tutors-grid">
-        <button class="tutor-btn" id="btn-ap" onclick="loadByTutor('ap', 'btn-ap')">
-            <div class="tutor-img-wrap">
-                <img src="{{ ap_img }}" alt="Anuradha Perera" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22200%22><rect width=%22200%22 height=%22200%22 fill=%22%234f86c6%22/><text x=%2250%%25%22 y=%2250%%25%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2260%22>AP</text></svg>'">
-            </div>
-            <span class="tutor-name">Anuradha<br>Perera</span>
-        </button>
-        <button class="tutor-btn" id="btn-ad" onclick="loadByTutor('ad', 'btn-ad')">
-            <div class="tutor-img-wrap">
-                <img src="{{ ad_img }}" alt="Amila Dasanayaka" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22200%22><rect width=%22200%22 height=%22200%22 fill=%22%2243a87c%22/><text x=%2250%%25%22 y=%2250%%25%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2260%22>AD</text></svg>'">
-            </div>
-            <span class="tutor-name">Amila<br>Dasanayaka</span>
-        </button>
-        <button class="tutor-btn" id="btn-sd" onclick="loadByTutor('sd', 'btn-sd')">
-            <div class="tutor-img-wrap">
-                <img src="{{ sd_img }}" alt="Sashanka Danujaya" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22200%22><rect width=%22200%22 height=%22200%22 fill=%22%23e8760a%22/><text x=%2250%%25%22 y=%2250%%25%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2260%22>SD</text></svg>'">
-            </div>
-            <span class="tutor-name">Sashanka<br>Danujaya</span>
-        </button>
+        <button class="search-btn" type="button" onclick="sendDiscussion('2025')">2025</button>
+        <button class="search-btn" type="button" onclick="sendDiscussion('2026')">2026</button>
     </div>
 
     <!-- Results -->
@@ -1039,6 +1238,7 @@ MINIAPP_HTML = """
         })();
 
         let currentTag = null;
+        let currentTutorLabel = null;
 
         function showToast(msg, dur) {
             const t = document.getElementById('toastMsg');
@@ -1072,12 +1272,58 @@ MINIAPP_HTML = """
             return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
         }
 
+        function escapeAttr(str) {
+            return escapeHtml(str).replace(/'/g, '&#39;');
+        }
+
+        function initials(name) {
+            const parts = (name || '').trim().split(/\\s+/).filter(Boolean);
+            if (!parts.length) return 'PB';
+            if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+            return (parts[0][0] + parts[1][0]).toUpperCase();
+        }
+
+        function tutorFallbackSvg(label) {
+            const txt = encodeURIComponent(label);
+            return 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" fill="%234f86c6"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="white" font-size="60">' + txt + '</text></svg>';
+        }
+
+        function loadTutorButtons() {
+            fetch('/api/tutor-buttons')
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    const grid = document.getElementById('tutorsGrid');
+                    const tutors = (data && data.tutors) ? data.tutors : [];
+                    if (!tutors.length) {
+                        grid.innerHTML = '<div class="empty-state"><p>No tutors added yet.</p></div>';
+                        return;
+                    }
+                    grid.innerHTML = tutors.map(function(t, idx) {
+                        const id = 'tutor-btn-' + idx;
+                        const name = t.name || t.search_tag || 'Tutor';
+                        const tag = t.search_tag || '';
+                        const img = t.image_url || '';
+                        const init = initials(name);
+                        return '<button class="tutor-btn" id="' + id + '" onclick="loadByTutor(' + JSON.stringify(tag) + ', ' + JSON.stringify(id) + ', ' + JSON.stringify(name) + ')">'
+                            + '<div class="tutor-img-wrap">'
+                            + '<img src="' + escapeAttr(img) + '" alt="' + escapeAttr(name) + '" onerror="this.src=' + JSON.stringify(tutorFallbackSvg(init)).replace(/"/g, '&quot;') + '">'
+                            + '</div>'
+                            + '<span class="tutor-name">' + escapeHtml(name) + '</span>'
+                            + '</button>';
+                    }).join('');
+                })
+                .catch(function() {
+                    showToast('Failed to load tutor buttons.');
+                });
+        }
+
         function doSearch() {
             const q = document.getElementById('searchInput').value.trim();
             if (!q) { showToast('Please enter a search keyword.'); return; }
             // Deactivate tutor buttons
             document.querySelectorAll('.tutor-btn').forEach(function(b) { b.classList.remove('active'); });
             currentTag = null;
+            currentTutorLabel = null;
             setLoading(true);
             fetch('/api/search?q=' + encodeURIComponent(q))
                 .then(function(r) { return r.json(); })
@@ -1088,16 +1334,22 @@ MINIAPP_HTML = """
                 .catch(function() { setLoading(false); showToast('Search failed. Please try again.'); });
         }
 
-        function loadByTutor(tag, btnId) {
+        function loadByTutor(tag, btnId, displayName) {
+            if (!tag) {
+                showToast('Tutor is missing search tag.');
+                return;
+            }
             // Toggle: clicking the same active tutor clears results
             if (currentTag === tag) {
                 currentTag = null;
+                currentTutorLabel = null;
                 document.getElementById(btnId).classList.remove('active');
                 document.getElementById('resultsTitle').style.display = 'none';
                 document.getElementById('resultsContainer').innerHTML = '<div class="empty-state"><i class="bi bi-search"></i><p>Search for papers above or tap a tutor to browse their papers.</p></div>';
                 return;
             }
             currentTag = tag;
+            currentTutorLabel = displayName || tag;
             document.querySelectorAll('.tutor-btn').forEach(function(b) { b.classList.remove('active'); });
             document.getElementById(btnId).classList.add('active');
             document.getElementById('searchInput').value = '';
@@ -1106,10 +1358,32 @@ MINIAPP_HTML = """
                 .then(function(r) { return r.json(); })
                 .then(function(data) {
                     setLoading(false);
-                    const names = {'ap': 'Anuradha Perera', 'ad': 'Amila Dasanayaka', 'sd': 'Sashanka Danujaya'};
-                    renderResults(data.files, 'No papers found for ' + (names[tag] || tag) + '.');
+                    renderResults(data.files, 'No papers found for ' + (currentTutorLabel || tag) + '.');
                 })
                 .catch(function() { setLoading(false); showToast('Failed to load papers. Please try again.'); });
+        }
+
+        function sendDiscussion(year) {
+            if (!(tg && tg.initDataUnsafe && tg.initDataUnsafe.user)) {
+                showToast('Open this app from Telegram to request discussions.', 3000);
+                return;
+            }
+            const userId = tg.initDataUnsafe.user.id;
+            showToast('Sending ' + year + ' discussions...', 3000);
+            fetch('/api/discussions/send', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({user_id: userId, year: year})
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.ok) {
+                    showToast('✅ Discussions sent to your Telegram chat!', 3000);
+                } else {
+                    showToast(data.error || '❌ Failed to send discussions.', 3000);
+                }
+            })
+            .catch(function() { showToast('❌ Network error. Please try again.', 3000); });
         }
 
         function downloadFile(fileId, fileName) {
@@ -1146,6 +1420,7 @@ MINIAPP_HTML = """
         document.getElementById('searchInput').addEventListener('keydown', function(e) {
             if (e.key === 'Enter') doSearch();
         });
+        loadTutorButtons();
     </script>
 </body>
 </html>
@@ -1154,10 +1429,7 @@ MINIAPP_HTML = """
 
 @app.route('/miniapp')
 def miniapp():
-    ap_img = url_for('static', filename='ap.jpg')
-    ad_img = url_for('static', filename='ad.jpg')
-    sd_img = url_for('static', filename='sd.jpg')
-    return render_template_string(MINIAPP_HTML, ap_img=ap_img, ad_img=ad_img, sd_img=sd_img)
+    return render_template_string(MINIAPP_HTML)
 
 
 @app.route('/api/search')
@@ -1179,17 +1451,57 @@ def api_search():
 @app.route('/api/tutors')
 def api_tutors():
     tag = request.args.get('tag', '').strip().lower()
-    if tag not in ('ap', 'ad', 'sd'):
+    if not tag:
         return jsonify({"files": [], "error": "Invalid tag"})
     try:
         results = list(files_col.find(
-            {"file_name": {"$regex": re.escape(tag), "$options": "i"}}
+            {"file_name": {"$regex": re.escape(normalize_query(tag)), "$options": "i"}}
         ).limit(50))
         files = [{"id": str(f['_id']), "file_name": f['file_name']} for f in results]
         return jsonify({"files": files})
     except Exception as e:
         logging.error("API tutors error: %s", e)
         return jsonify({"files": [], "error": "Database error"}), 500
+
+
+@app.route('/api/tutor-buttons')
+def api_tutor_buttons():
+    return jsonify({"tutors": get_tutor_buttons()})
+
+
+@app.route('/api/tutor-image/<tutor_id>')
+def api_tutor_image(tutor_id):
+    try:
+        tutor = tutor_buttons_col.find_one({"_id": ObjectId(tutor_id)}, {"image_file_id": 1})
+        if not tutor or not tutor.get("image_file_id"):
+            return "", 404
+        tg_file = bot.get_file(tutor["image_file_id"])
+        with urlopen(f"https://api.telegram.org/file/bot{BOT_TOKEN}/{tg_file.file_path}") as r:
+            data = r.read()
+        return Response(data, mimetype="image/jpeg")
+    except Exception as e:
+        logging.error("Failed to fetch tutor image: %s", e)
+        return "", 404
+
+
+@app.route('/api/discussions/send', methods=['POST'])
+def api_discussions_send():
+    data = request.get_json(silent=True) or {}
+    year = str(data.get('year', '')).strip()
+    user_id = data.get('user_id')
+    if year not in ("2025", "2026") or not str(user_id).strip():
+        return jsonify({"ok": False, "error": "Invalid request"}), 400
+    try:
+        status = get_subscription_status(int(user_id))
+        if not status["channel"] or not status["group"]:
+            return jsonify({"ok": False, "error": "Please complete verification first."}), 403
+        ok, err = send_discussion_messages(int(user_id), year)
+        if ok:
+            return jsonify({"ok": True})
+        return jsonify({"ok": False, "error": err}), 500
+    except Exception as e:
+        logging.error("API discussions send error: %s", e)
+        return jsonify({"ok": False, "error": "Failed to send discussions"}), 500
 
 
 @app.route('/api/verify_sub')

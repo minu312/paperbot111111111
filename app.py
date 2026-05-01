@@ -1304,7 +1304,7 @@ MINIAPP_HTML = """
                         const tag = t.search_tag || '';
                         const img = t.image_url || '';
                         const init = initials(name);
-                        return '<button class="tutor-btn" id="' + id + '" onclick="loadByTutor(' + JSON.stringify(tag) + ', ' + JSON.stringify(id) + ', ' + JSON.stringify(name) + ')">'
+                        return "<button class='tutor-btn' id='" + id + "' onclick='loadByTutor(" + JSON.stringify(tag) + ", " + JSON.stringify(id) + ", " + JSON.stringify(name) + ")'>"
                             + '<div class="tutor-img-wrap">'
                             + '<img src="' + escapeAttr(img) + '" alt="' + escapeAttr(name) + '" onerror="this.src=' + JSON.stringify(tutorFallbackSvg(init)).replace(/"/g, '&quot;') + '">'
                             + '</div>'

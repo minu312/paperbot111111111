@@ -429,12 +429,15 @@ def handle_docs(message):
     if is_admin or is_subadmin:
         file_id = message.document.file_id
         file_name = message.document.file_name.lower()
+        # Use caption as folder path if provided, otherwise default to root
+        folder = message.caption.strip().strip('/') if message.caption and message.caption.strip() else ""
         try:
             if files_col.find_one({"file_name": file_name}):
                 bot.reply_to(message, f"⚠️ File '{file_name}' is already in the database. Upload rejected.")
             else:
-                files_col.insert_one({"file_name": file_name, "file_id": file_id})
-                bot.reply_to(message, f"✅ Saved '{file_name}' successfully.")
+                files_col.insert_one({"file_name": file_name, "file_id": file_id, "folder": folder})
+                folder_display = f" in folder '{folder}'" if folder else ""
+                bot.reply_to(message, f"✅ Saved '{file_name}'{folder_display} successfully.")
         except PyMongoError as e:
             logging.error("Failed to save file '%s': %s", file_name, e)
             bot.reply_to(message, "⚠️ Failed to save. Please try again.")
@@ -577,6 +580,38 @@ def remove_file(message):
         bot.reply_to(message, f"⚠️ No file found with the exact name '{query}'. Make sure to include any tutor tags if they exist.")
 
 
+@bot.message_handler(commands=['movefile'])
+def move_file_to_folder(message):
+    if message.chat.type != 'private':
+        return
+    if not is_admin_or_subadmin(message.from_user.id):
+        return
+    parts = message.text.split(None, 2)
+    if len(parts) < 3:
+        bot.reply_to(message, "⚠️ Usage: /movefile <exact_file_name> <path/to/folder>\nUse '/' alone to move to root.")
+        return
+    file_name = parts[1].strip().lower()
+    folder_path = parts[2].strip().strip('/')
+    result = files_col.update_many({"file_name": file_name}, {"$set": {"folder": folder_path}})
+    if result.matched_count == 0:
+        bot.reply_to(message, f"⚠️ No file found with the exact name '{file_name}'.")
+    elif result.modified_count > 0:
+        folder_display = f"'{folder_path}'" if folder_path else "root"
+        bot.reply_to(message, f"✅ Moved {result.modified_count} file(s) named '{file_name}' to folder {folder_display}.")
+    else:
+        bot.reply_to(message, f"ℹ️ File '{file_name}' is already in that folder.")
+
+
+@bot.message_handler(commands=['browse'])
+def browse_command(message):
+    if message.chat.type != 'private':
+        return
+    if not enforce_subscription(message):
+        return
+    markup = _build_browse_markup("")
+    bot.reply_to(message, "📂 *Browse Past Papers*\n\nNavigate through folders:", reply_markup=markup, parse_mode='Markdown')
+
+
 # Handler 1: When a user sends a text message (e.g., essay), return a list of matching files as buttons
 @bot.message_handler(func=lambda message: True, content_types=['text'])
 def search_files_text(message):
@@ -715,6 +750,57 @@ def _build_backup_notification(source, full_name, username_display, user_id, fil
         f"ID: `{user_id}`\n"
         f"File: `{file_name}`"
     )
+
+
+def _build_browse_markup(path):
+    """Build inline keyboard for folder browsing at the given path."""
+    markup = InlineKeyboardMarkup()
+    markup.row_width = 2
+    try:
+        prefix = path + "/" if path else ""
+        if path:
+            all_distinct = files_col.distinct("folder", {"folder": {"$regex": f"^{re.escape(path)}/"}})
+        else:
+            all_distinct = files_col.distinct("folder")
+
+        subfolders = set()
+        for f in all_distinct:
+            if not f or f == path:
+                continue
+            if not path or f.startswith(prefix):
+                rest = f[len(prefix):]
+                if rest:
+                    subfolders.add(rest.split('/')[0])
+
+        for sf in sorted(subfolders):
+            full_path = prefix + sf
+            cb = f"browse:{full_path}"
+            if len(cb.encode()) <= 64:
+                markup.add(InlineKeyboardButton(f"📂 {sf}", callback_data=cb))
+
+        files_at_level = list(files_col.find({"folder": path}).limit(20))
+        for f in files_at_level:
+            markup.add(InlineKeyboardButton(f"📄 {f['file_name'][:30]}", callback_data=str(f['_id'])))
+
+        if path:
+            parent = path.rsplit('/', 1)[0] if '/' in path else ""
+            markup.add(InlineKeyboardButton("⬅️ Back", callback_data=f"browse:{parent}"))
+    except Exception as e:
+        logging.error("_build_browse_markup error: %s", e)
+    return markup
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('browse:'))
+def browse_callback(call):
+    path = call.data[7:]  # Remove 'browse:' prefix
+    markup = _build_browse_markup(path)
+    path_display = path if path else "Root"
+    text = f"📂 Browse: {path_display}\n\nSelect a folder or file:"
+    try:
+        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup)
+        bot.answer_callback_query(call.id)
+    except Exception:
+        bot.answer_callback_query(call.id, "Updated")
 
 
 @bot.callback_query_handler(func=lambda call: call.data != 'verify_sub' and len(call.data) == 24)
@@ -1135,6 +1221,84 @@ MINIAPP_HTML = """
             text-decoration: none;
             margin: 5px;
         }
+        /* Folder browser styles */
+        .browse-btn {
+            display: block;
+            width: calc(100% - 32px);
+            margin: 0 16px 12px;
+            padding: 12px;
+            background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            font-size: 0.95rem;
+            font-weight: 700;
+            text-align: left;
+            cursor: pointer;
+            box-shadow: 0 2px 8px rgba(217,119,6,0.25);
+        }
+        .browse-btn:active {
+            opacity: 0.88;
+        }
+        .folder-browser {
+            padding: 0 0 12px;
+        }
+        .breadcrumb-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: #e2e8f0;
+            margin: 0 16px 10px;
+            padding: 8px 12px;
+            border-radius: 10px;
+            font-size: 0.82rem;
+            flex-wrap: wrap;
+            gap: 4px;
+        }
+        .breadcrumb-bar span {
+            cursor: pointer;
+            color: var(--tg-accent);
+            font-weight: 600;
+        }
+        .breadcrumb-bar span:last-child {
+            color: #1e293b;
+            cursor: default;
+        }
+        .breadcrumb-sep {
+            color: #94a3b8;
+            margin: 0 2px;
+        }
+        .close-browse-btn {
+            background: #64748b;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            padding: 3px 8px;
+            font-size: 0.75rem;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+        .folder-item {
+            background: var(--tg-card);
+            border-radius: 12px;
+            padding: 12px 14px;
+            margin: 0 16px 8px;
+            display: flex;
+            align-items: center;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+            border: 1px solid #e2e8f0;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+        .folder-item:active {
+            background: #f1f5f9;
+        }
+        .folder-name {
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: #1e293b;
+            flex: 1;
+        }
     </style>
 </head>
 <body>
@@ -1164,6 +1328,21 @@ MINIAPP_HTML = """
     <div class="tutors-grid">
         <button class="search-btn" type="button" onclick="sendDiscussion('2025')">2025</button>
         <button class="search-btn" type="button" onclick="sendDiscussion('2026')">2026</button>
+    </div>
+
+    <!-- Browse Past Papers button -->
+    <div class="section-title">Past Papers Hierarchy</div>
+    <button class="browse-btn" onclick="showBrowse()">
+        <i class="bi bi-folder2-open me-2"></i>Browse Past Papers Folders
+    </button>
+
+    <!-- Folder Browser (hidden by default) -->
+    <div id="folderBrowser" class="folder-browser" style="display:none;">
+        <div class="breadcrumb-bar">
+            <div id="folderBreadcrumb">📂 Root</div>
+            <button class="close-browse-btn" onclick="hideBrowse()">✕ Close</button>
+        </div>
+        <div id="folderContents"></div>
     </div>
 
     <!-- Results -->
@@ -1421,6 +1600,86 @@ MINIAPP_HTML = """
             if (e.key === 'Enter') doSearch();
         });
         loadTutorButtons();
+
+        // ===== FOLDER BROWSER =====
+        function showBrowse() {
+            document.getElementById('folderBrowser').style.display = 'block';
+            loadFolder('');
+            document.getElementById('folderBrowser').scrollIntoView({behavior: 'smooth', block: 'start'});
+        }
+
+        function hideBrowse() {
+            document.getElementById('folderBrowser').style.display = 'none';
+        }
+
+        function loadFolder(path) {
+            setLoading(true);
+            fetch('/api/folders?path=' + encodeURIComponent(path))
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    setLoading(false);
+                    renderFolderContents(data);
+                })
+                .catch(function() { setLoading(false); showToast('Failed to load folder.'); });
+        }
+
+        function renderFolderContents(data) {
+            var path = data.path || '';
+            var folders = data.folders || [];
+            var files = data.files || [];
+
+            // Build breadcrumb
+            var parts = path ? path.split('/') : [];
+            var breadHTML = '<span onclick="loadFolder(\\'\\')">📂 Root</span>';
+            var buildPath = '';
+            for (var i = 0; i < parts.length; i++) {
+                buildPath += (i === 0 ? '' : '/') + parts[i];
+                var p = buildPath;
+                breadHTML += '<span class="breadcrumb-sep">/</span>';
+                if (i < parts.length - 1) {
+                    breadHTML += '<span onclick="loadFolder(\\'' + escapeAttr(p) + '\\')">' + escapeHtml(parts[i]) + '</span>';
+                } else {
+                    breadHTML += '<span style="color:#1e293b;cursor:default;">' + escapeHtml(parts[i]) + '</span>';
+                }
+            }
+            document.getElementById('folderBreadcrumb').innerHTML = breadHTML;
+
+            var html = '';
+
+            // Back button
+            if (path) {
+                var parent = path.indexOf('/') !== -1 ? path.substring(0, path.lastIndexOf('/')) : '';
+                html += '<div class="folder-item" onclick="loadFolder(\\'' + escapeAttr(parent) + '\\')">'
+                      + '<i class="bi bi-arrow-left-circle-fill text-secondary me-2"></i>'
+                      + '<span class="folder-name">.. Back</span>'
+                      + '</div>';
+            }
+
+            // Sub-folders
+            for (var fi = 0; fi < folders.length; fi++) {
+                var fp = path ? path + '/' + folders[fi] : folders[fi];
+                html += '<div class="folder-item" onclick="loadFolder(\\'' + escapeAttr(fp) + '\\')">'
+                      + '<i class="bi bi-folder-fill text-warning me-2"></i>'
+                      + '<span class="folder-name">' + escapeHtml(folders[fi]) + '</span>'
+                      + '<i class="bi bi-chevron-right text-muted ms-auto"></i>'
+                      + '</div>';
+            }
+
+            // Files
+            for (var fj = 0; fj < files.length; fj++) {
+                var f = files[fj];
+                html += '<div class="result-card">'
+                      + '<span class="result-name"><i class="bi bi-file-earmark-pdf-fill text-danger me-2"></i>' + escapeHtml(f.file_name) + '</span>'
+                      + '<button class="download-btn" onclick=\\'downloadFile(' + JSON.stringify(f.id) + ', ' + JSON.stringify(f.file_name).replace(/'/g, "&#39;") + ')\\'><i class="bi bi-download"></i> Get</button>'
+                      + '</div>';
+            }
+
+            if (!folders.length && !files.length) {
+                html = '<div class="empty-state"><i class="bi bi-folder2-open"></i><p>This folder is empty.</p></div>';
+            }
+
+            document.getElementById('folderContents').innerHTML = html;
+        }
     </script>
 </body>
 </html>
@@ -1502,6 +1761,38 @@ def api_discussions_send():
     except Exception as e:
         logging.error("API discussions send error: %s", e)
         return jsonify({"ok": False, "error": "Failed to send discussions"}), 500
+
+
+@app.route('/api/folders')
+def api_folders():
+    path = request.args.get('path', '').strip().strip('/')
+    try:
+        files_at_level = list(files_col.find({"folder": path}).limit(100))
+        files = [{"id": str(f['_id']), "file_name": f['file_name']} for f in files_at_level]
+
+        prefix = path + "/" if path else ""
+        if path:
+            all_distinct = files_col.distinct("folder", {"folder": {"$regex": f"^{re.escape(path)}/"}})
+        else:
+            all_distinct = files_col.distinct("folder")
+
+        subfolders = set()
+        for f in all_distinct:
+            if not f or f == path:
+                continue
+            if not path or f.startswith(prefix):
+                rest = f[len(prefix):]
+                if rest:
+                    subfolders.add(rest.split('/')[0])
+
+        return jsonify({
+            "path": path,
+            "folders": sorted(list(subfolders)),
+            "files": files
+        })
+    except Exception as e:
+        logging.error("API folders error: %s", e)
+        return jsonify({"path": path, "folders": [], "files": [], "error": "Database error"}), 500
 
 
 @app.route('/api/verify_sub')

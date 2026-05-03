@@ -433,7 +433,7 @@ def handle_docs(message):
         file_name = message.document.file_name.lower()
         # Check for pending upload path set via Mini App; fall back to caption, then root
         pending = pending_uploads_col.find_one({"user_id": user_id})
-        if pending and pending.get('path') is not None:
+        if pending and pending.get('path'):
             folder = pending['path']
         else:
             folder = message.caption.strip().strip('/') if message.caption and message.caption.strip() else ""
@@ -1744,7 +1744,12 @@ MINIAPP_HTML = """
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (data.ok) {
-                    alert('Please go back to the Telegram chat and send the file(s). They will be saved to this folder.');
+                    var msg = 'Please go back to the Telegram chat and send the file(s). They will be saved to this folder.';
+                    if (tg && tg.showPopup) {
+                        tg.showPopup({title: '⬆️ Upload Here', message: msg, buttons: [{type: 'ok'}]});
+                    } else {
+                        showToast('⬆️ ' + msg, 6000);
+                    }
                 } else {
                     showToast('❌ ' + (data.error || 'Failed to set upload path.'), 3000);
                 }
@@ -2011,8 +2016,11 @@ def api_create_folder():
     try:
         if not is_admin_or_subadmin(int(user_id)):
             return jsonify({"ok": False, "error": "Unauthorized"}), 403
-        if not virtual_folders_col.find_one({"path": path}):
-            virtual_folders_col.insert_one({"path": path})
+        virtual_folders_col.update_one(
+                {"path": path},
+                {"$setOnInsert": {"path": path}},
+                upsert=True
+            )
         return jsonify({"ok": True})
     except Exception as e:
         logging.error("API create_folder error: %s", e)

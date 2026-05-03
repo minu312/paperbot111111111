@@ -41,6 +41,8 @@ history_col = db['history']
 messages_col = db['messages']
 admins_col = db['admins']
 tutor_buttons_col = db['tutor_buttons']
+pending_uploads_col = db['pending_uploads']
+virtual_folders_col = db['virtual_folders']
 
 DEFAULT_TUTOR_BUTTONS = [
     {"name": "Anuradha Perera", "search_tag": "ap", "image_url": "/static/ap.jpg"},
@@ -429,8 +431,12 @@ def handle_docs(message):
     if is_admin or is_subadmin:
         file_id = message.document.file_id
         file_name = message.document.file_name.lower()
-        # Use caption as folder path if provided, otherwise default to root
-        folder = message.caption.strip().strip('/') if message.caption and message.caption.strip() else ""
+        # Check for pending upload path set via Mini App; fall back to caption, then root
+        pending = pending_uploads_col.find_one({"user_id": user_id})
+        if pending and pending.get('path'):
+            folder = pending['path']
+        else:
+            folder = message.caption.strip().strip('/') if message.caption and message.caption.strip() else ""
         try:
             if files_col.find_one({"file_name": file_name}):
                 bot.reply_to(message, f"⚠️ File '{file_name}' is already in the database. Upload rejected.")
@@ -1299,6 +1305,56 @@ MINIAPP_HTML = """
             color: #1e293b;
             flex: 1;
         }
+        /* Admin mode styles */
+        .admin-badge {
+            background: rgba(255,255,255,0.2);
+            border-radius: 6px;
+            padding: 2px 10px;
+            font-size: 0.7rem;
+            font-weight: 700;
+            margin-top: 5px;
+            display: inline-block;
+            letter-spacing: 0.05em;
+        }
+        .delete-btn {
+            background: #ef4444;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 6px 10px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            white-space: nowrap;
+            cursor: pointer;
+            margin-left: 6px;
+            transition: background 0.2s;
+            flex-shrink: 0;
+        }
+        .delete-btn:hover {
+            background: #dc2626;
+        }
+        .admin-action-bar {
+            display: flex;
+            gap: 8px;
+            padding: 0 16px 10px;
+        }
+        .admin-action-btn {
+            flex: 1;
+            padding: 9px 8px;
+            border: none;
+            border-radius: 10px;
+            font-size: 0.82rem;
+            font-weight: 600;
+            cursor: pointer;
+            color: white;
+            text-align: center;
+        }
+        .create-folder-btn {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+        }
+        .upload-here-btn {
+            background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+        }
     </style>
 </head>
 <body>
@@ -1306,6 +1362,7 @@ MINIAPP_HTML = """
     <div class="app-header">
         <h1>📚 PaperBot</h1>
         <p>Find & Download Past Papers Instantly</p>
+        <div id="adminBadge" class="admin-badge" style="display:none;">🛡️ Admin Mode</div>
     </div>
 
     <!-- Search -->
@@ -1418,6 +1475,7 @@ MINIAPP_HTML = """
 
         let currentTag = null;
         let currentTutorLabel = null;
+        var isAdmin = false;
 
         function showToast(msg, dur) {
             const t = document.getElementById('toastMsg');
@@ -1440,9 +1498,11 @@ MINIAPP_HTML = """
             }
             title.style.display = 'block';
             container.innerHTML = files.map(function(f) {
-                return '<div class="result-card">'
+                var deleteBtn = isAdmin ? '<button class="delete-btn" onclick=\\'deleteFile(' + JSON.stringify(f.id) + ', ' + JSON.stringify(f.file_name).replace(/'/g, "&#39;") + ')\\'><i class="bi bi-trash"></i></button>' : '';
+                return '<div class="result-card" id="card-' + f.id + '">'
                     + '<span class="result-name"><i class="bi bi-file-earmark-pdf-fill text-danger me-2"></i>' + escapeHtml(f.file_name) + '</span>'
                     + '<button class="download-btn" onclick=\\'downloadFile(' + JSON.stringify(f.id) + ', ' + JSON.stringify(f.file_name).replace(/'/g, "&#39;") + ')\\'><i class="bi bi-download"></i> Get</button>'
+                    + deleteBtn
                     + '</div>';
             }).join('');
         }
@@ -1600,6 +1660,102 @@ MINIAPP_HTML = """
             if (e.key === 'Enter') doSearch();
         });
         loadTutorButtons();
+        checkAdminMode();
+
+        // ===== ADMIN MODE =====
+        function checkAdminMode() {
+            if (!(tg && tg.initDataUnsafe && tg.initDataUnsafe.user)) return;
+            var userId = tg.initDataUnsafe.user.id;
+            fetch('/api/check_admin?user_id=' + encodeURIComponent(userId))
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    if (data.is_admin) {
+                        isAdmin = true;
+                        document.getElementById('adminBadge').style.display = 'inline-block';
+                    }
+                })
+                .catch(function() {});
+        }
+
+        function deleteFile(fileId, fileName) {
+            if (!isAdmin) return;
+            var userId = tg && tg.initDataUnsafe && tg.initDataUnsafe.user ? tg.initDataUnsafe.user.id : null;
+            if (!userId) { showToast('Admin action requires Telegram.', 3000); return; }
+            var doDelete = function() {
+                fetch('/api/delete_file', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({file_id: fileId, user_id: userId})
+                })
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    if (data.ok) {
+                        var card = document.getElementById('card-' + fileId);
+                        if (card) card.remove();
+                        showToast('✅ File deleted.', 2500);
+                    } else {
+                        showToast('❌ ' + (data.error || 'Failed to delete.'), 3000);
+                    }
+                })
+                .catch(function() { showToast('❌ Network error.', 3000); });
+            };
+            if (tg && tg.showConfirm) {
+                tg.showConfirm('Are you sure you want to delete "' + fileName + '"?', function(ok) {
+                    if (ok) doDelete();
+                });
+            } else {
+                if (confirm('Are you sure you want to delete "' + fileName + '"?')) doDelete();
+            }
+        }
+
+        function createFolder(parentPath) {
+            if (!isAdmin) return;
+            var userId = tg && tg.initDataUnsafe && tg.initDataUnsafe.user ? tg.initDataUnsafe.user.id : null;
+            if (!userId) { showToast('Admin action requires Telegram.', 3000); return; }
+            var folderName = prompt('Enter new folder name:');
+            if (!folderName || !folderName.trim()) return;
+            var newPath = parentPath ? parentPath + '/' + folderName.trim() : folderName.trim();
+            fetch('/api/create_folder', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({path: newPath, user_id: userId})
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.ok) {
+                    showToast('✅ Folder "' + folderName.trim() + '" created.', 2500);
+                    loadFolder(parentPath);
+                } else {
+                    showToast('❌ ' + (data.error || 'Failed to create folder.'), 3000);
+                }
+            })
+            .catch(function() { showToast('❌ Network error.', 3000); });
+        }
+
+        function setUploadPath(path) {
+            if (!isAdmin) return;
+            var userId = tg && tg.initDataUnsafe && tg.initDataUnsafe.user ? tg.initDataUnsafe.user.id : null;
+            if (!userId) { showToast('Admin action requires Telegram.', 3000); return; }
+            fetch('/api/set_upload_path', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({path: path, user_id: userId})
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.ok) {
+                    var msg = 'Please go back to the Telegram chat and send the file(s). They will be saved to this folder.';
+                    if (tg && tg.showPopup) {
+                        tg.showPopup({title: '⬆️ Upload Here', message: msg, buttons: [{type: 'ok'}]});
+                    } else {
+                        showToast('⬆️ ' + msg, 6000);
+                    }
+                } else {
+                    showToast('❌ ' + (data.error || 'Failed to set upload path.'), 3000);
+                }
+            })
+            .catch(function() { showToast('❌ Network error.', 3000); });
+        }
 
         // ===== FOLDER BROWSER =====
         function showBrowse() {
@@ -1646,6 +1802,18 @@ MINIAPP_HTML = """
 
             var html = '';
 
+            // Admin action bar (Create Folder / Upload Here)
+            if (isAdmin) {
+                html += '<div class="admin-action-bar">'
+                      + '<button class="admin-action-btn create-folder-btn" onclick="createFolder(\\'' + escapeAttr(path) + '\\')">'
+                      + '<i class="bi bi-folder-plus me-1"></i>➕ Create Folder</button>';
+                if (path) {
+                    html += '<button class="admin-action-btn upload-here-btn" onclick="setUploadPath(\\'' + escapeAttr(path) + '\\')">'
+                          + '<i class="bi bi-cloud-upload me-1"></i>⬆️ Upload Here</button>';
+                }
+                html += '</div>';
+            }
+
             // Back button
             if (path) {
                 var parent = path.indexOf('/') !== -1 ? path.substring(0, path.lastIndexOf('/')) : '';
@@ -1668,14 +1836,16 @@ MINIAPP_HTML = """
             // Files
             for (var fj = 0; fj < files.length; fj++) {
                 var f = files[fj];
-                html += '<div class="result-card">'
+                var adminDelBtn = isAdmin ? '<button class="delete-btn" onclick=\\'deleteFile(' + JSON.stringify(f.id) + ', ' + JSON.stringify(f.file_name).replace(/'/g, "&#39;") + ')\\'><i class="bi bi-trash"></i></button>' : '';
+                html += '<div class="result-card" id="card-' + f.id + '">'
                       + '<span class="result-name"><i class="bi bi-file-earmark-pdf-fill text-danger me-2"></i>' + escapeHtml(f.file_name) + '</span>'
                       + '<button class="download-btn" onclick=\\'downloadFile(' + JSON.stringify(f.id) + ', ' + JSON.stringify(f.file_name).replace(/'/g, "&#39;") + ')\\'><i class="bi bi-download"></i> Get</button>'
+                      + adminDelBtn
                       + '</div>';
             }
 
             if (!folders.length && !files.length) {
-                html = '<div class="empty-state"><i class="bi bi-folder2-open"></i><p>This folder is empty.</p></div>';
+                html += '<div class="empty-state"><i class="bi bi-folder2-open"></i><p>This folder is empty.</p></div>';
             }
 
             document.getElementById('folderContents').innerHTML = html;
@@ -1785,6 +1955,17 @@ def api_folders():
                 if rest:
                     subfolders.add(rest.split('/')[0])
 
+        # Also include virtual folders created by admins
+        if path:
+            vf_regex = f"^{re.escape(path)}/[^/]+$"
+        else:
+            vf_regex = "^[^/]+$"
+        for vf in virtual_folders_col.find({"path": {"$regex": vf_regex}}):
+            vf_path = vf.get('path', '')
+            rest = vf_path[len(prefix):] if path else vf_path
+            if rest and '/' not in rest:
+                subfolders.add(rest)
+
         return jsonify({
             "path": path,
             "folders": sorted(list(subfolders)),
@@ -1793,6 +1974,78 @@ def api_folders():
     except Exception as e:
         logging.error("API folders error: %s", e)
         return jsonify({"path": path, "folders": [], "files": [], "error": "Database error"}), 500
+
+
+@app.route('/api/check_admin')
+def api_check_admin():
+    user_id = request.args.get('user_id')
+    if not user_id:
+        return jsonify({"is_admin": False})
+    try:
+        return jsonify({"is_admin": is_admin_or_subadmin(int(user_id))})
+    except Exception:
+        return jsonify({"is_admin": False})
+
+
+@app.route('/api/delete_file', methods=['POST'])
+def api_delete_file():
+    data = request.get_json(silent=True) or {}
+    file_id = data.get('file_id', '').strip()
+    user_id = data.get('user_id')
+    if not file_id or user_id is None:
+        return jsonify({"ok": False, "error": "Missing parameters"}), 400
+    try:
+        if not is_admin_or_subadmin(int(user_id)):
+            return jsonify({"ok": False, "error": "Unauthorized"}), 403
+        result = files_col.delete_one({"_id": ObjectId(file_id)})
+        if result.deleted_count:
+            return jsonify({"ok": True})
+        return jsonify({"ok": False, "error": "File not found"}), 404
+    except Exception as e:
+        logging.error("API delete_file error: %s", e)
+        return jsonify({"ok": False, "error": "Delete failed"}), 500
+
+
+@app.route('/api/create_folder', methods=['POST'])
+def api_create_folder():
+    data = request.get_json(silent=True) or {}
+    path = data.get('path', '').strip().strip('/')
+    user_id = data.get('user_id')
+    if not path or user_id is None:
+        return jsonify({"ok": False, "error": "Missing parameters"}), 400
+    try:
+        if not is_admin_or_subadmin(int(user_id)):
+            return jsonify({"ok": False, "error": "Unauthorized"}), 403
+        virtual_folders_col.update_one(
+                {"path": path},
+                {"$setOnInsert": {"path": path}},
+                upsert=True
+            )
+        return jsonify({"ok": True})
+    except Exception as e:
+        logging.error("API create_folder error: %s", e)
+        return jsonify({"ok": False, "error": "Create folder failed"}), 500
+
+
+@app.route('/api/set_upload_path', methods=['POST'])
+def api_set_upload_path():
+    data = request.get_json(silent=True) or {}
+    path = data.get('path', '').strip().strip('/')
+    user_id = data.get('user_id')
+    if user_id is None:
+        return jsonify({"ok": False, "error": "Missing user_id"}), 400
+    try:
+        if not is_admin_or_subadmin(int(user_id)):
+            return jsonify({"ok": False, "error": "Unauthorized"}), 403
+        pending_uploads_col.update_one(
+            {"user_id": int(user_id)},
+            {"$set": {"path": path}},
+            upsert=True
+        )
+        return jsonify({"ok": True})
+    except Exception as e:
+        logging.error("API set_upload_path error: %s", e)
+        return jsonify({"ok": False, "error": "Failed to set upload path"}), 500
 
 
 @app.route('/api/verify_sub')

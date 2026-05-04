@@ -433,10 +433,9 @@ def handle_docs(message):
         file_name = message.document.file_name.lower()
         # Check for pending upload path set via Mini App; fall back to caption, then root
         pending = pending_uploads_col.find_one({"user_id": user_id})
-        used_pending_path = False
-        if pending and pending.get('path'):
+        used_pending_path = bool(pending and pending.get('path'))
+        if used_pending_path:
             folder = pending['path']
-            used_pending_path = True
         else:
             folder = message.caption.strip().strip('/') if message.caption and message.caption.strip() else ""
         try:
@@ -445,8 +444,7 @@ def handle_docs(message):
             else:
                 files_col.insert_one({"file_name": file_name, "file_id": file_id, "folder": folder})
                 folder_display = f" in folder '{folder}'" if folder else ""
-                path_note = " (upload path cleared)" if used_pending_path else ""
-                bot.reply_to(message, f"✅ Saved '{file_name}'{folder_display} successfully.{path_note}")
+                bot.reply_to(message, f"✅ Saved '{file_name}'{folder_display} successfully.")
                 if used_pending_path:
                     pending_uploads_col.delete_one({"user_id": user_id})
         except PyMongoError as e:

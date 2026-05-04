@@ -433,8 +433,10 @@ def handle_docs(message):
         file_name = message.document.file_name.lower()
         # Check for pending upload path set via Mini App; fall back to caption, then root
         pending = pending_uploads_col.find_one({"user_id": user_id})
+        used_pending_path = False
         if pending and pending.get('path'):
             folder = pending['path']
+            used_pending_path = True
         else:
             folder = message.caption.strip().strip('/') if message.caption and message.caption.strip() else ""
         try:
@@ -443,7 +445,10 @@ def handle_docs(message):
             else:
                 files_col.insert_one({"file_name": file_name, "file_id": file_id, "folder": folder})
                 folder_display = f" in folder '{folder}'" if folder else ""
-                bot.reply_to(message, f"✅ Saved '{file_name}'{folder_display} successfully.")
+                path_note = " (upload path cleared)" if used_pending_path else ""
+                bot.reply_to(message, f"✅ Saved '{file_name}'{folder_display} successfully.{path_note}")
+                if used_pending_path:
+                    pending_uploads_col.delete_one({"user_id": user_id})
         except PyMongoError as e:
             logging.error("Failed to save file '%s': %s", file_name, e)
             bot.reply_to(message, "⚠️ Failed to save. Please try again.")
@@ -1793,7 +1798,7 @@ MINIAPP_HTML = """
                 var p = buildPath;
                 breadHTML += '<span class="breadcrumb-sep">/</span>';
                 if (i < parts.length - 1) {
-                    breadHTML += '<span onclick="loadFolder(\\'' + escapeAttr(p) + '\\')">' + escapeHtml(parts[i]) + '</span>';
+                    breadHTML += '<span onclick="loadFolder(' + escapeAttr(JSON.stringify(p)) + ')">' + escapeHtml(parts[i]) + '</span>';
                 } else {
                     breadHTML += '<span style="color:#1e293b;cursor:default;">' + escapeHtml(parts[i]) + '</span>';
                 }
@@ -1805,10 +1810,10 @@ MINIAPP_HTML = """
             // Admin action bar (Create Folder / Upload Here)
             if (isAdmin) {
                 html += '<div class="admin-action-bar">'
-                      + '<button class="admin-action-btn create-folder-btn" onclick="createFolder(\\'' + escapeAttr(path) + '\\')">'
+                      + '<button class="admin-action-btn create-folder-btn" onclick="createFolder(' + escapeAttr(JSON.stringify(path)) + ')">'
                       + '<i class="bi bi-folder-plus me-1"></i>➕ Create Folder</button>';
                 if (path) {
-                    html += '<button class="admin-action-btn upload-here-btn" onclick="setUploadPath(\\'' + escapeAttr(path) + '\\')">'
+                    html += '<button class="admin-action-btn upload-here-btn" onclick="setUploadPath(' + escapeAttr(JSON.stringify(path)) + ')">'
                           + '<i class="bi bi-cloud-upload me-1"></i>⬆️ Upload Here</button>';
                 }
                 html += '</div>';
@@ -1817,7 +1822,7 @@ MINIAPP_HTML = """
             // Back button
             if (path) {
                 var parent = path.indexOf('/') !== -1 ? path.substring(0, path.lastIndexOf('/')) : '';
-                html += '<div class="folder-item" onclick="loadFolder(\\'' + escapeAttr(parent) + '\\')">'
+                html += '<div class="folder-item" onclick="loadFolder(' + escapeAttr(JSON.stringify(parent)) + ')">'
                       + '<i class="bi bi-arrow-left-circle-fill text-secondary me-2"></i>'
                       + '<span class="folder-name">.. Back</span>'
                       + '</div>';
@@ -1826,7 +1831,7 @@ MINIAPP_HTML = """
             // Sub-folders
             for (var fi = 0; fi < folders.length; fi++) {
                 var fp = path ? path + '/' + folders[fi] : folders[fi];
-                html += '<div class="folder-item" onclick="loadFolder(\\'' + escapeAttr(fp) + '\\')">'
+                html += '<div class="folder-item" onclick="loadFolder(' + escapeAttr(JSON.stringify(fp)) + ')">'
                       + '<i class="bi bi-folder-fill text-warning me-2"></i>'
                       + '<span class="folder-name">' + escapeHtml(folders[fi]) + '</span>'
                       + '<i class="bi bi-chevron-right text-muted ms-auto"></i>'

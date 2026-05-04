@@ -513,38 +513,32 @@ def broadcast(message):
         return
     if message.from_user.id != ADMIN_ID:
         return
+    bot.reply_to(message, "Please send the message or media (photo, document, video, text) you want to broadcast.")
+    bot.register_next_step_handler(message, do_broadcast)
 
-    parts = message.text.split(None, 1)
-    if len(parts) < 2 or not parts[1].strip():
-        bot.reply_to(message, "⚠️ Usage: /broadcast <your message>")
+
+def do_broadcast(message):
+    if message.from_user.id != ADMIN_ID:
+        logging.warning("Unauthorized do_broadcast attempt from user_id %s", message.from_user.id)
         return
-
-    broadcast_text = parts[1].strip()
     success = 0
     failed = 0
+    sent_users = set()
 
     for user in users_col.find():
+        user_id = user.get('user_id')
+        if user_id in sent_users:
+            continue
+        sent_users.add(user_id)
         try:
-            bot.send_message(user['user_id'], broadcast_text, parse_mode='Markdown')
+            bot.copy_message(chat_id=user_id, from_chat_id=message.chat.id, message_id=message.message_id)
             success += 1
-        except telebot.apihelper.ApiTelegramException as e:
-            if "parse" in str(e).lower() or "markdown" in str(e).lower():
-                try:
-                    # Fallback to plain text if markdown fails
-                    bot.send_message(user['user_id'], broadcast_text)
-                    success += 1
-                except Exception as ex:
-                    logging.warning("Broadcast fallback failed for user_id %s: %s", user.get('user_id'), ex)
-                    failed += 1
-            else:
-                logging.warning("Broadcast failed for user_id %s: %s", user.get('user_id'), e)
-                failed += 1
         except Exception as e:
-            logging.warning("Broadcast failed for user_id %s: %s", user.get('user_id'), e)
+            logging.warning("Broadcast failed for user_id %s: %s", user_id, e)
             failed += 1
 
-    bot.reply_to(
-        message,
+    bot.send_message(
+        message.chat.id,
         f"✅ Broadcast complete!\nSuccessfully sent to: {success} users\nFailed: {failed} users"
     )
 
@@ -1358,6 +1352,44 @@ MINIAPP_HTML = """
         .upload-here-btn {
             background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
         }
+        /* AP Virtual Folder styles */
+        .ap-folder-btn {
+            background: var(--tg-card);
+            border-radius: 12px;
+            padding: 12px 14px;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+            border: 1px solid #e2e8f0;
+            cursor: pointer;
+            transition: background 0.15s;
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: #1e293b;
+        }
+        .ap-folder-btn:active {
+            background: #f1f5f9;
+        }
+        .ap-folder-count {
+            background: #e2e8f0;
+            border-radius: 12px;
+            padding: 2px 8px;
+            font-size: 0.78rem;
+            font-weight: 700;
+            color: #64748b;
+            margin-left: 8px;
+        }
+        .ap-new-folder-btn {
+            border: 2px dashed #10b981;
+            color: #059669;
+            background: #f0fdf4;
+        }
+        .ap-back-btn {
+            background: #f1f5f9;
+            color: #475569;
+            margin-bottom: 10px;
+        }
     </style>
 </head>
 <body>
@@ -1510,6 +1542,112 @@ MINIAPP_HTML = """
             }).join('');
         }
 
+        // ===== AP VIRTUAL FOLDER STATE =====
+        var apAllFiles = [];
+
+        function renderApResults(files) {
+            apAllFiles = files || [];
+            document.getElementById('resultsTitle').textContent = 'Results';
+            renderApRoot();
+        }
+
+        function renderApRoot() {
+            const container = document.getElementById('resultsContainer');
+            const title = document.getElementById('resultsTitle');
+
+            var finalFiles = apAllFiles.filter(function(f) { return f.file_name.toLowerCase().indexOf('ap final') !== -1; });
+            var mainFiles  = apAllFiles.filter(function(f) { return f.file_name.toLowerCase().indexOf('ap main')  !== -1; });
+            var fullFiles  = apAllFiles.filter(function(f) { return f.file_name.toLowerCase().indexOf('ap full')  !== -1; });
+            var otherFiles = apAllFiles.filter(function(f) {
+                var n = f.file_name.toLowerCase();
+                return n.indexOf('ap final') === -1 && n.indexOf('ap main') === -1 && n.indexOf('ap full') === -1;
+            });
+
+            if (!apAllFiles.length) {
+                title.style.display = 'none';
+                container.innerHTML = '<div class="empty-state"><i class="bi bi-inbox"></i><p>No papers found for Anuradha Perera.</p></div>';
+                return;
+            }
+            title.style.display = 'block';
+
+            var html = '';
+
+            if (finalFiles.length) {
+                html += '<div class="ap-folder-btn" onclick="openApFolder(\'final\')">'
+                      + '<i class="bi bi-folder-fill text-warning me-2"></i>'
+                      + '<span>final papers</span>'
+                      + '<span class="ap-folder-count">' + finalFiles.length + '</span>'
+                      + '<i class="bi bi-chevron-right text-muted ms-auto"></i>'
+                      + '</div>';
+            }
+            if (mainFiles.length) {
+                html += '<div class="ap-folder-btn" onclick="openApFolder(\'main\')">'
+                      + '<i class="bi bi-folder-fill text-warning me-2"></i>'
+                      + '<span>main papers</span>'
+                      + '<span class="ap-folder-count">' + mainFiles.length + '</span>'
+                      + '<i class="bi bi-chevron-right text-muted ms-auto"></i>'
+                      + '</div>';
+            }
+            if (fullFiles.length) {
+                html += '<div class="ap-folder-btn" onclick="openApFolder(\'full\')">'
+                      + '<i class="bi bi-folder-fill text-warning me-2"></i>'
+                      + '<span>full papers</span>'
+                      + '<span class="ap-folder-count">' + fullFiles.length + '</span>'
+                      + '<i class="bi bi-chevron-right text-muted ms-auto"></i>'
+                      + '</div>';
+            }
+
+            html += '<div class="ap-folder-btn ap-new-folder-btn" onclick="createFolder(\'\')">'
+                  + '<i class="bi bi-folder-plus me-2"></i>'
+                  + '<span>➕ new folder</span>'
+                  + '</div>';
+
+            otherFiles.forEach(function(f) {
+                var deleteBtn = isAdmin ? '<button class="delete-btn" onclick=\\'deleteFile(' + JSON.stringify(f.id) + ', ' + JSON.stringify(f.file_name).replace(/'/g, "&#39;") + ')\\'><i class="bi bi-trash"></i></button>' : '';
+                html += '<div class="result-card" id="card-' + f.id + '">'
+                      + '<span class="result-name"><i class="bi bi-file-earmark-pdf-fill text-danger me-2"></i>' + escapeHtml(f.file_name) + '</span>'
+                      + '<button class="download-btn" onclick=\\'downloadFile(' + JSON.stringify(f.id) + ', ' + JSON.stringify(f.file_name).replace(/'/g, "&#39;") + ')\\'><i class="bi bi-download"></i> Get</button>'
+                      + deleteBtn
+                      + '</div>';
+            });
+
+            container.innerHTML = html;
+        }
+
+        function openApFolder(folderType) {
+            var keyword = 'ap ' + folderType;
+            var folderFiles = apAllFiles.filter(function(f) { return f.file_name.toLowerCase().indexOf(keyword) !== -1; });
+            var folderLabel = folderType + ' papers';
+
+            document.getElementById('resultsTitle').textContent = '📁 ' + folderLabel;
+            var container = document.getElementById('resultsContainer');
+
+            var html = '<div class="ap-folder-btn ap-back-btn" onclick="backToApRoot()">'
+                      + '<i class="bi bi-arrow-left-circle-fill text-secondary me-2"></i>'
+                      + '<span>← Back</span>'
+                      + '</div>';
+
+            folderFiles.forEach(function(f) {
+                var deleteBtn = isAdmin ? '<button class="delete-btn" onclick=\\'deleteFile(' + JSON.stringify(f.id) + ', ' + JSON.stringify(f.file_name).replace(/'/g, "&#39;") + ')\\'><i class="bi bi-trash"></i></button>' : '';
+                html += '<div class="result-card" id="card-' + f.id + '">'
+                      + '<span class="result-name"><i class="bi bi-file-earmark-pdf-fill text-danger me-2"></i>' + escapeHtml(f.file_name) + '</span>'
+                      + '<button class="download-btn" onclick=\\'downloadFile(' + JSON.stringify(f.id) + ', ' + JSON.stringify(f.file_name).replace(/'/g, "&#39;") + ')\\'><i class="bi bi-download"></i> Get</button>'
+                      + deleteBtn
+                      + '</div>';
+            });
+
+            if (!folderFiles.length) {
+                html += '<div class="empty-state"><i class="bi bi-inbox"></i><p>No files in ' + escapeHtml(folderLabel) + '.</p></div>';
+            }
+
+            container.innerHTML = html;
+        }
+
+        function backToApRoot() {
+            document.getElementById('resultsTitle').textContent = 'Results';
+            renderApRoot();
+        }
+
         function escapeHtml(str) {
             return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
         }
@@ -1600,7 +1738,11 @@ MINIAPP_HTML = """
                 .then(function(r) { return r.json(); })
                 .then(function(data) {
                     setLoading(false);
-                    renderResults(data.files, 'No papers found for ' + (currentTutorLabel || tag) + '.');
+                    if (tag === 'ap') {
+                        renderApResults(data.files);
+                    } else {
+                        renderResults(data.files, 'No papers found for ' + (currentTutorLabel || tag) + '.');
+                    }
                 })
                 .catch(function() { setLoading(false); showToast('Failed to load papers. Please try again.'); });
         }

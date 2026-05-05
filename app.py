@@ -43,6 +43,7 @@ admins_col = db['admins']
 tutor_buttons_col = db['tutor_buttons']
 pending_uploads_col = db['pending_uploads']
 virtual_folders_col = db['virtual_folders']
+broadcast_logs_col = db['broadcast_logs']
 
 DEFAULT_TUTOR_BUTTONS = [
     {"name": "Anuradha Perera", "search_tag": "ap", "image_url": "/static/ap.jpg"},
@@ -513,7 +514,7 @@ def broadcast(message):
         return
     if message.from_user.id != ADMIN_ID:
         return
-    bot.reply_to(message, "Please send the message or media (photo, document, video, text) you want to broadcast.")
+    bot.reply_to(message, "Please send the message or media you want to broadcast.\n(Or type 'end broadcast' to cancel).")
     bot.register_next_step_handler(message, do_broadcast)
 
 
@@ -521,6 +522,13 @@ def do_broadcast(message):
     if message.from_user.id != ADMIN_ID:
         logging.warning("Unauthorized do_broadcast attempt from user_id %s", message.from_user.id)
         return
+
+    # Allow admin to cancel the broadcast
+    if message.text and message.text.strip().lower() == 'end broadcast':
+        bot.reply_to(message, "✅ Broadcast cancelled.")
+        return
+
+    broadcast_id = str(uuid.uuid4())[:8]
     success = 0
     failed = 0
     sent_users = set()
@@ -531,7 +539,12 @@ def do_broadcast(message):
             continue
         sent_users.add(user_id)
         try:
-            bot.copy_message(chat_id=user_id, from_chat_id=message.chat.id, message_id=message.message_id)
+            sent_msg = bot.copy_message(chat_id=user_id, from_chat_id=message.chat.id, message_id=message.message_id)
+            broadcast_logs_col.insert_one({
+                "broadcast_id": broadcast_id,
+                "user_id": user_id,
+                "message_id": sent_msg.message_id
+            })
             success += 1
         except Exception as e:
             logging.warning("Broadcast failed for user_id %s: %s", user_id, e)
@@ -539,7 +552,41 @@ def do_broadcast(message):
 
     bot.send_message(
         message.chat.id,
-        f"✅ Broadcast complete!\nSuccessfully sent to: {success} users\nFailed: {failed} users"
+        f"✅ Broadcast complete! Broadcast ID: {broadcast_id}\n"
+        f"Successfully sent to: {success} users\nFailed: {failed} users\n\n"
+        f"To delete this broadcast later, use: /deletebroadcast {broadcast_id}"
+    )
+
+
+@bot.message_handler(commands=['deletebroadcast'])
+def deletebroadcast(message):
+    if message.chat.type != 'private':
+        return
+    if message.from_user.id != ADMIN_ID:
+        return
+    parts = message.text.split(None, 1)
+    if len(parts) < 2 or not parts[1].strip():
+        bot.reply_to(message, "Usage: /deletebroadcast <broadcast_id>")
+        return
+    broadcast_id = parts[1].strip()
+    logs = list(broadcast_logs_col.find({"broadcast_id": broadcast_id}, {"user_id": 1, "message_id": 1}))
+    if not logs:
+        bot.reply_to(message, f"⚠️ No broadcast found with ID: {broadcast_id}")
+        return
+    deleted = 0
+    failed = 0
+    for log in logs:
+        try:
+            bot.delete_message(log['user_id'], log['message_id'])
+            deleted += 1
+        except Exception as e:
+            logging.warning("Delete broadcast message failed for user_id %s: %s", log.get('user_id'), e)
+            failed += 1
+    broadcast_logs_col.delete_many({"broadcast_id": broadcast_id})
+    bot.reply_to(
+        message,
+        f"🗑️ Broadcast {broadcast_id} deleted.\n"
+        f"Successfully deleted from: {deleted} chats\nFailed: {failed} chats"
     )
 
 @bot.message_handler(commands=['cleardb'])
@@ -1636,11 +1683,6 @@ MINIAPP_HTML = """
                       + '<i class="bi bi-chevron-right text-muted ms-auto"></i>'
                       + '</div>';
             }
-
-            html += '<div class="ap-folder-btn ap-new-folder-btn" onclick="createFolder(\\'\\')">'
-                  + '<i class="bi bi-folder-plus me-2"></i>'
-                  + '<span>➕ new folder</span>'
-                  + '</div>';
 
             otherFiles.forEach(function(f) {
                 var deleteBtn = isAdmin ? '<button class="delete-btn" onclick=\\'deleteFile(' + JSON.stringify(f.id) + ', ' + JSON.stringify(f.file_name).replace(/'/g, "&#39;") + ')\\'><i class="bi bi-trash"></i></button>' : '';

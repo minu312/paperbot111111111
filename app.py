@@ -684,7 +684,7 @@ def search_files_text(message):
     lower_text = message.text.strip().lower()
 
     # Auto-reply for tutor name keywords
-    if 'anuradha perera' in lower_text or 'anurada perera' in lower_text:
+    if 'anuradha perera' in lower_text or 'anurada perera' in lower_text or 'anurada' in lower_text or 'anuradha' in lower_text:
         bot.reply_to(
             message,
             "It looks like you are looking for Anuradha Perera Sir's papers\\!\n"
@@ -697,7 +697,7 @@ def search_files_text(message):
         )
         return
 
-    if 'amila dasanayaka' in lower_text or 'amila dasanayake' in lower_text:
+    if 'amila dasanayaka' in lower_text or 'amila dasanayake' in lower_text or 'amila' in lower_text:
         bot.reply_to(
             message,
             "Looking for Amila Dasanayaka Sir's papers\\?\n"
@@ -710,7 +710,7 @@ def search_files_text(message):
         )
         return
 
-    if 'sashanka danujaya' in lower_text:
+    if 'sashanka danujaya' in lower_text or 'sashanka' in lower_text or 'sashanka dhanujaya' in lower_text or 'sasanka' in lower_text:
         bot.reply_to(
             message,
             "Searching for Sashanka Danujaya Sir's papers\\?\n"

@@ -1573,7 +1573,7 @@ MINIAPP_HTML = """
             var html = '';
 
             if (finalFiles.length) {
-                html += '<div class="ap-folder-btn" onclick="openApFolder(\'final\')">'
+                html += '<div class="ap-folder-btn" onclick="openApFolder(\\'final\\')">'
                       + '<i class="bi bi-folder-fill text-warning me-2"></i>'
                       + '<span>final papers</span>'
                       + '<span class="ap-folder-count">' + finalFiles.length + '</span>'
@@ -1581,7 +1581,7 @@ MINIAPP_HTML = """
                       + '</div>';
             }
             if (mainFiles.length) {
-                html += '<div class="ap-folder-btn" onclick="openApFolder(\'main\')">'
+                html += '<div class="ap-folder-btn" onclick="openApFolder(\\'main\\')">'
                       + '<i class="bi bi-folder-fill text-warning me-2"></i>'
                       + '<span>main papers</span>'
                       + '<span class="ap-folder-count">' + mainFiles.length + '</span>'
@@ -1589,7 +1589,7 @@ MINIAPP_HTML = """
                       + '</div>';
             }
             if (fullFiles.length) {
-                html += '<div class="ap-folder-btn" onclick="openApFolder(\'full\')">'
+                html += '<div class="ap-folder-btn" onclick="openApFolder(\\'full\\')">'
                       + '<i class="bi bi-folder-fill text-warning me-2"></i>'
                       + '<span>full papers</span>'
                       + '<span class="ap-folder-count">' + fullFiles.length + '</span>'
@@ -1597,7 +1597,7 @@ MINIAPP_HTML = """
                       + '</div>';
             }
 
-            html += '<div class="ap-folder-btn ap-new-folder-btn" onclick="createFolder(\'\')">'
+            html += '<div class="ap-folder-btn ap-new-folder-btn" onclick="createFolder(\\'\\')">'
                   + '<i class="bi bi-folder-plus me-2"></i>'
                   + '<span>➕ new folder</span>'
                   + '</div>';

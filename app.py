@@ -697,7 +697,7 @@ def search_files_text(message):
         )
         return
 
-    if 'amila dasanayaka' in lower_text:
+    if 'amila dasanayaka' in lower_text or 'amila dasanayake' in lower_text:
         bot.reply_to(
             message,
             "Looking for Amila Dasanayaka Sir's papers\\?\n"

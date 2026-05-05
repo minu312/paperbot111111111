@@ -648,6 +648,46 @@ def search_files_text(message):
 
     lower_text = message.text.strip().lower()
 
+    # Auto-reply for tutor name keywords
+    if 'anuradha perera' in lower_text or 'anurada perera' in lower_text:
+        bot.reply_to(
+            message,
+            "It looks like you are looking for Anuradha Perera Sir's papers\\!\n"
+            "To find them easily, please search using the short code `ap` along with the paper name\\.\n\n"
+            "Examples \\(Tap to copy\\):\n"
+            "`ap full paper 1`\n"
+            "`ap final paper 2`\n\n"
+            "Or simply use our mini app to browse all papers\\!",
+            parse_mode='MarkdownV2'
+        )
+        return
+
+    if 'amila dasanayaka' in lower_text:
+        bot.reply_to(
+            message,
+            "Looking for Amila Dasanayaka Sir's papers\\?\n"
+            "To find them quickly, use the short code `ad` before the paper name\\.\n\n"
+            "Examples \\(Tap to copy\\):\n"
+            "`ad full paper 1`\n"
+            "`ad final paper 2`\n\n"
+            "Or simply use our mini app to browse all papers\\!",
+            parse_mode='MarkdownV2'
+        )
+        return
+
+    if 'sashanka danujaya' in lower_text:
+        bot.reply_to(
+            message,
+            "Searching for Sashanka Danujaya Sir's papers\\?\n"
+            "You can find them instantly by typing the short code `sd` with your paper name\\.\n\n"
+            "Examples \\(Tap to copy\\):\n"
+            "`sd full paper 1`\n"
+            "`sd final paper 2`\n\n"
+            "Or simply use our mini app to browse all papers\\!",
+            parse_mode='MarkdownV2'
+        )
+        return
+
     if lower_text == "past papers":
         markup = build_miniapp_markup()
         bot.reply_to(message, "use our mini app 👈", reply_markup=markup)

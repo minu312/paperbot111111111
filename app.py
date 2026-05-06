@@ -49,6 +49,9 @@ DEFAULT_TUTOR_BUTTONS = [
     {"name": "Sashanka Danujaya", "search_tag": "sd", "image_url": "/static/sd.jpg"},
 ]
 
+# Number of results to show per page in bot search results
+PAGE_SIZE = 8
+
 
 # ================= QUERY HELPERS =================
 
@@ -650,6 +653,22 @@ def browse_command(message):
     bot.reply_to(message, "📂 *Browse Past Papers*\n\nNavigate through folders:", reply_markup=markup, parse_mode='Markdown')
 
 
+def _build_search_page_markup(results, page, total, query_str):
+    """Build an InlineKeyboardMarkup for a paginated page of search results."""
+    markup = InlineKeyboardMarkup()
+    markup.row_width = 1
+    for f in results:
+        markup.add(InlineKeyboardButton(f['file_name'], callback_data=str(f['_id'])))
+    nav_row = []
+    if page > 0:
+        nav_row.append(InlineKeyboardButton("⬅️ Previous", callback_data=f"spage:{page - 1}:{query_str[:40]}"))
+    if (page + 1) * PAGE_SIZE < total:
+        nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"spage:{page + 1}:{query_str[:40]}"))
+    if nav_row:
+        markup.row(*nav_row)
+    return markup
+
+
 # Handler 1: When a user sends a text message (e.g., essay), return a list of matching files as buttons
 @bot.message_handler(func=lambda message: True, content_types=['text'])
 def search_files_text(message):
@@ -758,10 +777,10 @@ def search_files_text(message):
         )
         return
 
-    # Search the database for files matching the query (up to 10 results)
-    results = list(files_col.find({"file_name": {"$regex": query}}).limit(10))
-    
-    if not results:
+    # Search the database for files matching the query, newest first
+    total_count = files_col.count_documents({"file_name": {"$regex": query}})
+
+    if not total_count:
         bot.reply_to(message, "Sorry, no papers were found matching that name.")
         # Forward unmatched search to OTHERS group so admins can see what users are looking for
         user_id = message.from_user.id
@@ -770,16 +789,45 @@ def search_files_text(message):
         if not is_admin and not is_subadmin:
             _forward_user_submission(message)
         return
-        
-    # Build the inline keyboard with buttons for each result
-    markup = InlineKeyboardMarkup()
-    markup.row_width = 1
-    for f in results:
-        # Create a button with the file name
-        btn = InlineKeyboardButton(f['file_name'], callback_data=str(f['_id']))
-        markup.add(btn)
-        
+
+    results = list(files_col.find({"file_name": {"$regex": query}}).sort("_id", -1).limit(PAGE_SIZE))
+
+    markup = _build_search_page_markup(results, 0, total_count, query)
     bot.reply_to(message, "🔍 Here are the papers I found. Click on a paper below to download it:", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('spage:'))
+def search_page_callback(call):
+    parts = call.data.split(':', 2)
+    if len(parts) != 3:
+        bot.answer_callback_query(call.id)
+        return
+    _, page_str, query = parts
+    try:
+        page = int(page_str)
+    except ValueError:
+        bot.answer_callback_query(call.id)
+        return
+
+    query = normalize_query(query)
+    total = files_col.count_documents({"file_name": {"$regex": query}})
+    results = list(
+        files_col.find({"file_name": {"$regex": query}})
+        .sort("_id", -1)
+        .skip(page * PAGE_SIZE)
+        .limit(PAGE_SIZE)
+    )
+
+    if not results:
+        bot.answer_callback_query(call.id, "No results found.", show_alert=True)
+        return
+
+    markup = _build_search_page_markup(results, page, total, query)
+    try:
+        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=markup)
+        bot.answer_callback_query(call.id)
+    except Exception as e:
+        logging.warning("search_page_callback edit failed: %s", e)
+        bot.answer_callback_query(call.id)
 
 @bot.callback_query_handler(func=lambda call: call.data == 'verify_sub')
 def verify_subscription_callback(call):
@@ -1827,7 +1875,7 @@ def api_search():
     try:
         results = list(files_col.find(
             {"file_name": {"$regex": re.escape(q), "$options": "i"}}
-        ).limit(20))
+        ).sort("_id", -1).limit(20))
         files = [{"id": str(f['_id']), "file_name": f['file_name']} for f in results]
         return jsonify({"files": files})
     except Exception as e:
@@ -1843,7 +1891,7 @@ def api_tutors():
     try:
         results = list(files_col.find(
             {"file_name": {"$regex": re.escape(normalize_query(tag)), "$options": "i"}}
-        ).limit(50))
+        ).sort("_id", -1).limit(50))
         files = [{"id": str(f['_id']), "file_name": f['file_name']} for f in results]
         return jsonify({"files": files})
     except Exception as e:

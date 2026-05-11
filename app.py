@@ -157,9 +157,9 @@ def send_discussion_tutor_buttons(chat_id, reply_to_message_id=None):
     markup = InlineKeyboardMarkup()
     markup.row_width = 3
     markup.add(
-        InlineKeyboardButton("[AP]", callback_data="discussion_tutor:ap"),
-        InlineKeyboardButton("[AD]", callback_data="discussion_tutor:ad"),
-        InlineKeyboardButton("[SD]", callback_data="discussion_tutor:sd"),
+        InlineKeyboardButton("AP", callback_data="discussion_tutor:ap"),
+        InlineKeyboardButton("AD", callback_data="discussion_tutor:ad"),
+        InlineKeyboardButton("SD", callback_data="discussion_tutor:sd"),
     )
     bot.send_message(chat_id, "Please choose a tutor:", reply_markup=markup, reply_to_message_id=reply_to_message_id)
 

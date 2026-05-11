@@ -25,8 +25,9 @@ FORCE_GROUP_ID = os.environ.get('FORCE_GROUP_ID')      # e.g., "-100987654321"
 FORCE_CHANNEL_URL = os.environ.get('FORCE_CHANNEL_URL')
 FORCE_GROUP_URL = os.environ.get('FORCE_GROUP_URL')
 ADMIN_CHANNEL_ID = os.environ.get('ADMIN_CHANNEL_ID')
-DISCUSSION_2025_MSG_ID = os.environ.get('DISCUSSION_2025_MSG_ID', '')
-DISCUSSION_2026_MSG_ID = os.environ.get('DISCUSSION_2026_MSG_ID', '')
+DISCUSSION_AP_MSG_ID = os.environ.get('DISCUSSION_AP_MSG_ID', '')
+DISCUSSION_AD_MSG_ID = os.environ.get('DISCUSSION_AD_MSG_ID', '')
+DISCUSSION_SD_MSG_ID = os.environ.get('DISCUSSION_SD_MSG_ID', '')
 
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
@@ -121,12 +122,16 @@ def _extract_msg_id_from_token(token):
     return None
 
 
-def send_discussion_messages(target_chat_id, year):
-    refs_by_year = {"2025": DISCUSSION_2025_MSG_ID, "2026": DISCUSSION_2026_MSG_ID}
-    raw_refs = refs_by_year.get(str(year), "")
+def send_discussion_messages(target_chat_id, tutor):
+    refs_by_tutor = {
+        "ap": DISCUSSION_AP_MSG_ID,
+        "ad": DISCUSSION_AD_MSG_ID,
+        "sd": DISCUSSION_SD_MSG_ID,
+    }
+    raw_refs = refs_by_tutor.get(str(tutor).lower(), "")
     tokens = [t for t in re.split(r'[\s,]+', raw_refs.strip()) if t]
     if not tokens:
-        return False, "⚠️ Discussion messages are not configured for this year yet."
+        return False, "⚠️ Discussion messages are not configured for this tutor yet."
 
     sent_any = False
     admin_channel = int(ADMIN_CHANNEL_ID) if ADMIN_CHANNEL_ID and str(ADMIN_CHANNEL_ID).lstrip('-').isdigit() else None
@@ -138,7 +143,7 @@ def send_discussion_messages(target_chat_id, year):
                 sent_any = True
                 continue
             except Exception as e:
-                logging.error("Failed forwarding discussion message %s for %s: %s", msg_id, year, e)
+                logging.error("Failed forwarding discussion message %s for %s: %s", msg_id, tutor, e)
         if token.startswith("http://") or token.startswith("https://"):
             bot.send_message(target_chat_id, token)
             sent_any = True
@@ -148,14 +153,15 @@ def send_discussion_messages(target_chat_id, year):
     return False, "⚠️ Failed to send discussion materials. Please contact admin."
 
 
-def send_discussion_year_buttons(chat_id, reply_to_message_id=None):
+def send_discussion_tutor_buttons(chat_id, reply_to_message_id=None):
     markup = InlineKeyboardMarkup()
-    markup.row_width = 2
+    markup.row_width = 3
     markup.add(
-        InlineKeyboardButton("2025", callback_data="discussion_year:2025"),
-        InlineKeyboardButton("2026", callback_data="discussion_year:2026")
+        InlineKeyboardButton("[AP]", callback_data="discussion_tutor:ap"),
+        InlineKeyboardButton("[AD]", callback_data="discussion_tutor:ad"),
+        InlineKeyboardButton("[SD]", callback_data="discussion_tutor:sd"),
     )
-    bot.send_message(chat_id, "Please choose a discussion year:", reply_markup=markup, reply_to_message_id=reply_to_message_id)
+    bot.send_message(chat_id, "Please choose a tutor:", reply_markup=markup, reply_to_message_id=reply_to_message_id)
 
 
 # ================= FORCE SUBSCRIBE HELPERS =================
@@ -756,13 +762,13 @@ def search_files_text(message):
         return
 
     if re.search(r'\bdiscussions?\b', lower_text):
-        year_match = re.search(r'\b(2025|2026)\b', lower_text)
-        if year_match:
-            ok, err = send_discussion_messages(message.chat.id, year_match.group(1))
+        tutor_match = re.search(r'\b(ap|ad|sd)\b', lower_text)
+        if tutor_match:
+            ok, err = send_discussion_messages(message.chat.id, tutor_match.group(1))
             if not ok:
                 bot.reply_to(message, err)
         else:
-            send_discussion_year_buttons(message.chat.id, reply_to_message_id=message.message_id)
+            send_discussion_tutor_buttons(message.chat.id, reply_to_message_id=message.message_id)
         return
 
     # Detect generic category phrases and prompt the user to include a paper number
@@ -853,15 +859,15 @@ def verify_subscription_callback(call):
             pass
 
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('discussion_year:'))
-def discussion_year_callback(call):
-    year = call.data.split(':', 1)[1] if ':' in call.data else ""
-    if year not in ("2025", "2026"):
-        bot.answer_callback_query(call.id, "Invalid year", show_alert=True)
+@bot.callback_query_handler(func=lambda call: call.data.startswith('discussion_tutor:'))
+def discussion_tutor_callback(call):
+    tutor = call.data.split(':', 1)[1] if ':' in call.data else ""
+    if tutor not in ("ap", "ad", "sd"):
+        bot.answer_callback_query(call.id, "Invalid tutor", show_alert=True)
         return
-    ok, err = send_discussion_messages(call.message.chat.id, year)
+    ok, err = send_discussion_messages(call.message.chat.id, tutor)
     if ok:
-        bot.answer_callback_query(call.id, f"Sending {year} discussions...")
+        bot.answer_callback_query(call.id, f"Sending {tutor.upper()} discussions...")
     else:
         bot.answer_callback_query(call.id, "Failed to send discussions", show_alert=True)
         bot.send_message(call.message.chat.id, err)
@@ -1441,8 +1447,9 @@ MINIAPP_HTML = """
 
     <div class="section-title">Discussions</div>
     <div class="tutors-grid">
-        <button class="search-btn" type="button" onclick="sendDiscussion('2025')">2025</button>
-        <button class="search-btn" type="button" onclick="sendDiscussion('2026')">2026</button>
+        <button class="search-btn" type="button" onclick="sendDiscussion('ap')">AP</button>
+        <button class="search-btn" type="button" onclick="sendDiscussion('ad')">AD</button>
+        <button class="search-btn" type="button" onclick="sendDiscussion('sd')">SD</button>
     </div>
 
     <!-- Results -->
@@ -1750,17 +1757,17 @@ MINIAPP_HTML = """
                 .catch(function() { setLoading(false); showToast('Failed to load papers. Please try again.'); });
         }
 
-        function sendDiscussion(year) {
+        function sendDiscussion(tutor) {
             if (!(tg && tg.initDataUnsafe && tg.initDataUnsafe.user)) {
                 showToast('Open this app from Telegram to request discussions.', 3000);
                 return;
             }
             const userId = tg.initDataUnsafe.user.id;
-            showToast('Sending ' + year + ' discussions...', 3000);
+            showToast('Sending ' + tutor.toUpperCase() + ' discussions...', 3000);
             fetch('/api/discussions/send', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({user_id: userId, year: year})
+                body: JSON.stringify({user_id: userId, tutor: tutor})
             })
             .then(function(r) { return r.json(); })
             .then(function(data) {
@@ -1922,15 +1929,15 @@ def api_tutor_image(tutor_id):
 @app.route('/api/discussions/send', methods=['POST'])
 def api_discussions_send():
     data = request.get_json(silent=True) or {}
-    year = str(data.get('year', '')).strip()
+    tutor = str(data.get('tutor', '')).strip().lower()
     user_id = data.get('user_id')
-    if year not in ("2025", "2026") or not str(user_id).strip():
+    if tutor not in ("ap", "ad", "sd") or not str(user_id).strip():
         return jsonify({"ok": False, "error": "Invalid request"}), 400
     try:
         status = get_subscription_status(int(user_id))
         if not status["channel"] or not status["group"]:
             return jsonify({"ok": False, "error": "Please complete verification first."}), 403
-        ok, err = send_discussion_messages(int(user_id), year)
+        ok, err = send_discussion_messages(int(user_id), tutor)
         if ok:
             return jsonify({"ok": True})
         return jsonify({"ok": False, "error": err}), 500

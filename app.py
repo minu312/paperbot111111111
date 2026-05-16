@@ -515,11 +515,34 @@ def admin_reply_to_user(message):
         bot.reply_to(message, "❌ Failed to send reply. The user may have blocked the bot.")
 
 
+def extract_target_user_id(message):
+    command_text = (message.text or message.caption or '').strip()
+    parts = command_text.split(None, 1)
+    if len(parts) >= 2 and parts[1].strip():
+        raw_id = parts[1].strip()
+        if re.fullmatch(r'\d+', raw_id):
+            return int(raw_id)
+        bot.reply_to(message, "⚠️ Invalid user ID. Please provide a numeric user ID.")
+        return None
+
+    replied = message.reply_to_message
+    if not replied:
+        bot.reply_to(message, "⚠️ Please provide a user ID or reply to the info message that contains the user's ID.")
+        return None
+
+    text_to_search = replied.text or replied.caption or ''
+    match = re.search(r'ID: (\d+)', text_to_search)
+    if match:
+        return int(match.group(1))
+    if replied.forward_from:
+        return replied.forward_from.id
+
+    bot.reply_to(message, "⚠️ Could not find the User ID. Please reply to the info message that contains the user's ID.")
+    return None
+
+
 @bot.message_handler(commands=['ban'], func=lambda message: (
-    message.chat.id in [ADMIN_GROUP_ID, OTHERS_GROUP_ID, BACKUP_GROUP_ID] and
-    message.reply_to_message is not None and
-    message.reply_to_message.from_user is not None and
-    message.reply_to_message.from_user.id == bot.get_me().id
+    message.chat.id in [ADMIN_GROUP_ID, BACKUP_GROUP_ID]
 ))
 def ban_user(message):
     sender_id = message.from_user.id
@@ -527,15 +550,8 @@ def ban_user(message):
         bot.reply_to(message, "⚠️ You do not have permission to ban users.")
         return
 
-    replied = message.reply_to_message
-    text_to_search = replied.text or replied.caption or ''
-    match = re.search(r'ID: (\d+)', text_to_search)
-    if match:
-        user_id = int(match.group(1))
-    elif replied.forward_from:
-        user_id = replied.forward_from.id
-    else:
-        bot.reply_to(message, "⚠️ Could not find the User ID. Please reply to the info message that contains the user's ID.")
+    user_id = extract_target_user_id(message)
+    if user_id is None:
         return
 
     if user_id == bot.get_me().id:
@@ -547,7 +563,7 @@ def ban_user(message):
         return
 
     if is_banned(user_id):
-        bot.reply_to(message, f"⚠️ User [{user_id}] is already banned.")
+        bot.reply_to(message, "⚠️ User is already in the banned list.")
         return
 
     banned_users_col.insert_one({
@@ -555,7 +571,28 @@ def ban_user(message):
         "banned_at": datetime.now(timezone.utc),
         "banned_by": sender_id
     })
-    bot.reply_to(message, f"✅ User [{user_id}] has been banned successfully.")
+    bot.reply_to(message, f"✅ User {user_id} has been banned.")
+
+
+@bot.message_handler(commands=['unban'], func=lambda message: (
+    message.chat.id in [ADMIN_GROUP_ID, BACKUP_GROUP_ID]
+))
+def unban_user(message):
+    sender_id = message.from_user.id
+    if not is_admin_or_subadmin(sender_id):
+        bot.reply_to(message, "⚠️ You do not have permission to unban users.")
+        return
+
+    user_id = extract_target_user_id(message)
+    if user_id is None:
+        return
+
+    result = banned_users_col.delete_one({"user_id": user_id})
+    if result.deleted_count == 0:
+        bot.reply_to(message, "⚠️ User is not in the banned list.")
+        return
+
+    bot.reply_to(message, f"✅ User {user_id} has been unbanned.")
 
 @bot.message_handler(commands=['broadcast'])
 def broadcast(message):

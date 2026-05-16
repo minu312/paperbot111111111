@@ -2085,6 +2085,7 @@ def api_verify_sub():
         uid = int(user_id)
         if is_banned(uid):
             return jsonify({"subscribed": False, "banned": True})
+            
         status = get_subscription_status(uid)
         subscribed = status["channel"] and status["group"]
         result = {"subscribed": subscribed}
@@ -2113,6 +2114,7 @@ def api_download():
         uid = int(user_id)
         if is_banned(uid):
             return jsonify({"ok": False, "error": "banned"})
+            
         status = get_subscription_status(uid)
         if not status["channel"] or not status["group"]:
             return jsonify({"ok": False, "error": "subscription_required"})
@@ -2123,9 +2125,9 @@ def api_download():
         history_col.insert_one({"user_id": uid, "query": "miniapp_download", "file_sent": file_name})
         if BACKUP_GROUP_ID:
             try:
-                full_name = ' '.join(filter(None, [first_name, last_name])) or str(user_id)
+                full_name = ' '.join(filter(None, [first_name, last_name])) or str(uid)
                 username_display = f"@{username}" if username else "No username"
-                backup_text = _build_backup_notification("miniapp", full_name, username_display, user_id, file_name)
+                backup_text = _build_backup_notification("miniapp", full_name, username_display, uid, file_name)
                 bot.send_message(BACKUP_GROUP_ID, backup_text, parse_mode="Markdown")
             except Exception as e:
                 logging.error(f"Failed to send backup msg: {e}")

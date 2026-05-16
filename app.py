@@ -43,6 +43,7 @@ messages_col = db['messages']
 admins_col = db['admins']
 tutor_buttons_col = db['tutor_buttons']
 broadcast_logs_col = db['broadcast_logs']
+banned_users_col = db['banned_users']
 
 DEFAULT_TUTOR_BUTTONS = [
     {"name": "Anuradha Perera", "search_tag": "ap", "image_url": "/static/ap.jpg"},
@@ -65,6 +66,10 @@ def normalize_query(q):
 
 def is_admin_or_subadmin(user_id):
     return user_id == ADMIN_ID or admins_col.count_documents({"user_id": user_id}, limit=1) > 0
+
+
+def is_banned(user_id):
+    return banned_users_col.count_documents({"user_id": user_id}, limit=1) > 0
 
 
 def build_miniapp_markup():
@@ -211,6 +216,8 @@ def enforce_subscription(message):
 def start(message):
     if message.chat.type != 'private':
         return
+    if is_banned(message.from_user.id):
+        return
     if not enforce_subscription(message):
         return
     user_id = message.from_user.id
@@ -231,6 +238,8 @@ def start(message):
 @bot.message_handler(commands=['help'])
 def help_command(message):
     if message.chat.type != 'private':
+        return
+    if is_banned(message.from_user.id):
         return
     if not enforce_subscription(message):
         return
@@ -505,6 +514,38 @@ def admin_reply_to_user(message):
     except Exception:
         bot.reply_to(message, "❌ Failed to send reply. The user may have blocked the bot.")
 
+
+@bot.message_handler(commands=['ban'], func=lambda message: (
+    any([ADMIN_GROUP_ID, OTHERS_GROUP_ID, BACKUP_GROUP_ID]) and
+    message.chat.id in [ADMIN_GROUP_ID, OTHERS_GROUP_ID, BACKUP_GROUP_ID] and
+    message.reply_to_message is not None and
+    message.reply_to_message.from_user is not None and
+    message.reply_to_message.from_user.id == bot.get_me().id
+))
+def ban_user(message):
+    sender_id = message.from_user.id
+    if not is_admin_or_subadmin(sender_id):
+        bot.reply_to(message, "⚠️ You do not have permission to ban users.")
+        return
+
+    replied = message.reply_to_message
+    text_to_search = replied.text or replied.caption or ''
+    match = re.search(r'ID: (\d+)', text_to_search)
+    if match:
+        user_id = int(match.group(1))
+    elif replied.forward_from:
+        user_id = replied.forward_from.id
+    else:
+        bot.reply_to(message, "⚠️ Could not find the User ID. Please reply to the info message that contains the user's ID.")
+        return
+
+    banned_users_col.update_one(
+        {"user_id": user_id},
+        {"$set": {"user_id": user_id, "banned_at": datetime.now(timezone.utc), "banned_by": sender_id}},
+        upsert=True
+    )
+    bot.reply_to(message, f"✅ User [{user_id}] has been banned successfully.")
+
 @bot.message_handler(commands=['broadcast'])
 def broadcast(message):
     if message.chat.type != 'private':
@@ -679,6 +720,8 @@ def _build_search_page_markup(results, page, total, query_str):
 @bot.message_handler(func=lambda message: True, content_types=['text'])
 def search_files_text(message):
     if message.chat.type != 'private':
+        return
+    if is_banned(message.from_user.id):
         return
     if not enforce_subscription(message):
         return
@@ -937,6 +980,8 @@ def browse_callback(call):
 
 @bot.callback_query_handler(func=lambda call: call.data != 'verify_sub' and len(call.data) == 24)
 def send_file_callback(call):
+    if is_banned(call.from_user.id):
+        return
     try:
         # Retrieve the selected file from the database
         file_data = files_col.find_one({"_id": ObjectId(call.data)})

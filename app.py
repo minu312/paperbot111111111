@@ -520,7 +520,7 @@ def extract_target_user_id(message):
     parts = command_text.split(None, 1)
     if len(parts) >= 2 and parts[1].strip():
         raw_id = parts[1].strip()
-        if re.fullmatch(r'-?\d+', raw_id):
+        if re.fullmatch(r'\d+', raw_id):
             return int(raw_id)
         bot.reply_to(message, "⚠️ Invalid user ID. Please provide a numeric user ID.")
         return None
@@ -531,7 +531,7 @@ def extract_target_user_id(message):
         return None
 
     text_to_search = replied.text or replied.caption or ''
-    match = re.search(r'ID: (-?\d+)', text_to_search)
+    match = re.search(r'ID: (\d+)', text_to_search)
     if match:
         return int(match.group(1))
     if replied.forward_from:

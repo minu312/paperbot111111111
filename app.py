@@ -488,7 +488,8 @@ def handle_media(message):
     message.chat.id in [ADMIN_GROUP_ID, OTHERS_GROUP_ID, BACKUP_GROUP_ID] and
     message.reply_to_message is not None and
     message.reply_to_message.from_user is not None and
-    message.reply_to_message.from_user.id == bot.get_me().id
+    message.reply_to_message.from_user.id == bot.get_me().id and
+    not (message.text and message.text.startswith('/'))
 ), content_types=['text'])
 def admin_reply_to_user(message):
     sender_id = message.from_user.id
@@ -542,7 +543,7 @@ def extract_target_user_id(message):
 
 
 @bot.message_handler(commands=['ban'], func=lambda message: (
-    message.chat.id in [ADMIN_GROUP_ID, BACKUP_GROUP_ID]
+    message.chat.id in [ADMIN_GROUP_ID, BACKUP_GROUP_ID, OTHERS_GROUP_ID]
 ))
 def ban_user(message):
     sender_id = message.from_user.id
@@ -575,7 +576,7 @@ def ban_user(message):
 
 
 @bot.message_handler(commands=['unban'], func=lambda message: (
-    message.chat.id in [ADMIN_GROUP_ID, BACKUP_GROUP_ID]
+    message.chat.id in [ADMIN_GROUP_ID, BACKUP_GROUP_ID, OTHERS_GROUP_ID]
 ))
 def unban_user(message):
     sender_id = message.from_user.id

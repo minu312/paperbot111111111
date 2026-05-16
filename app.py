@@ -1586,6 +1586,12 @@ MINIAPP_HTML = """
                 fetch('/api/verify_sub?user_id=' + encodeURIComponent(userId))
                     .then(function(r) { return r.json(); })
                     .then(function(data) {
+                        if (data.banned) {
+                            const overlay = document.getElementById('subOverlay');
+                            overlay.style.display = 'flex';
+                            overlay.innerHTML = '<div style="font-size:2.5rem;margin-bottom:12px;">🚫</div><h2>Access Denied</h2><p>You have been permanently banned from using PaperBot.</p>';
+                            return;
+                        }
                         if (data.subscribed) {
                             document.getElementById('subOverlay').style.display = 'none';
                         } else {
@@ -2076,7 +2082,10 @@ def api_verify_sub():
     if not user_id:
         return jsonify({"subscribed": False, "error": "Missing user_id"}), 400
     try:
-        status = get_subscription_status(int(user_id))
+        uid = int(user_id)
+        if is_banned(uid):
+            return jsonify({"subscribed": False, "banned": True})
+        status = get_subscription_status(uid)
         subscribed = status["channel"] and status["group"]
         result = {"subscribed": subscribed}
         if not status["channel"] and FORCE_CHANNEL_URL:
@@ -2101,14 +2110,17 @@ def api_download():
     if not file_id or not user_id:
         return jsonify({"ok": False, "error": "Missing file_id or user_id"})
     try:
-        status = get_subscription_status(int(user_id))
+        uid = int(user_id)
+        if is_banned(uid):
+            return jsonify({"ok": False, "error": "banned"})
+        status = get_subscription_status(uid)
         if not status["channel"] or not status["group"]:
             return jsonify({"ok": False, "error": "subscription_required"})
         file_data = files_col.find_one({"_id": ObjectId(file_id)})
         if not file_data:
             return jsonify({"ok": False, "error": "File not found"})
-        bot.send_document(int(user_id), file_data['file_id'])
-        history_col.insert_one({"user_id": int(user_id), "query": "miniapp_download", "file_sent": file_name})
+        bot.send_document(uid, file_data['file_id'])
+        history_col.insert_one({"user_id": uid, "query": "miniapp_download", "file_sent": file_name})
         if BACKUP_GROUP_ID:
             try:
                 full_name = ' '.join(filter(None, [first_name, last_name])) or str(user_id)

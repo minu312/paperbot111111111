@@ -69,7 +69,7 @@ def is_admin_or_subadmin(user_id):
 
 
 def is_banned(user_id):
-    return banned_users_col.count_documents({"user_id": user_id}, limit=1) > 0
+    return banned_users_col.find_one({"user_id": user_id}) is not None
 
 
 def build_miniapp_markup():
@@ -516,7 +516,6 @@ def admin_reply_to_user(message):
 
 
 @bot.message_handler(commands=['ban'], func=lambda message: (
-    any([ADMIN_GROUP_ID, OTHERS_GROUP_ID, BACKUP_GROUP_ID]) and
     message.chat.id in [ADMIN_GROUP_ID, OTHERS_GROUP_ID, BACKUP_GROUP_ID] and
     message.reply_to_message is not None and
     message.reply_to_message.from_user is not None and
@@ -539,11 +538,23 @@ def ban_user(message):
         bot.reply_to(message, "⚠️ Could not find the User ID. Please reply to the info message that contains the user's ID.")
         return
 
-    banned_users_col.update_one(
-        {"user_id": user_id},
-        {"$set": {"user_id": user_id, "banned_at": datetime.now(timezone.utc), "banned_by": sender_id}},
-        upsert=True
-    )
+    if user_id == bot.get_me().id:
+        bot.reply_to(message, "⚠️ Invalid target user ID.")
+        return
+
+    if is_admin_or_subadmin(user_id):
+        bot.reply_to(message, "⚠️ You cannot ban an admin or sub-admin.")
+        return
+
+    if is_banned(user_id):
+        bot.reply_to(message, f"⚠️ User [{user_id}] is already banned.")
+        return
+
+    banned_users_col.insert_one({
+        "user_id": user_id,
+        "banned_at": datetime.now(timezone.utc),
+        "banned_by": sender_id
+    })
     bot.reply_to(message, f"✅ User [{user_id}] has been banned successfully.")
 
 @bot.message_handler(commands=['broadcast'])

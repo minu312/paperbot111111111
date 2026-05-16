@@ -1579,19 +1579,25 @@ MINIAPP_HTML = """
             document.body.style.background = tg.themeParams.bg_color || '#f5f7fa';
         }
 
-        // Check subscription on load
+// Check subscription on load
         (function checkSubscription() {
             if (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) {
                 const userId = tg.initDataUnsafe.user.id;
                 fetch('/api/verify_sub?user_id=' + encodeURIComponent(userId))
                     .then(function(r) { return r.json(); })
                     .then(function(data) {
+                        
+                        // Menna me block eka thama aluthin anne
                         if (data.banned) {
                             const overlay = document.getElementById('subOverlay');
                             overlay.style.display = 'flex';
-                            overlay.innerHTML = '<div style="font-size:2.5rem;margin-bottom:12px;">🚫</div><h2>Access Denied</h2><p>You have been permanently banned from using PaperBot.</p>';
+                            overlay.innerHTML = '<div style="font-size:2.5rem;margin-bottom:12px;">🚫</div>' +
+                                                '<h2>Access Denied</h2>' +
+                                                '<p>You have been permanently banned from using PaperBot.</p>';
                             return;
                         }
+                        // Aluth block eka iwarai
+
                         if (data.subscribed) {
                             document.getElementById('subOverlay').style.display = 'none';
                         } else {

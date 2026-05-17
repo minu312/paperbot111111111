@@ -30,7 +30,7 @@ DISCUSSION_AD_MSG_ID = os.environ.get('DISCUSSION_AD_MSG_ID', '')
 DISCUSSION_SD_MSG_ID = os.environ.get('DISCUSSION_SD_MSG_ID', '')
 # Setup Caption Variable (Replace with your actual bot/channel usernames)
 DEFAULT_CAPTION = (
-    "📚 *Downloaded from Learn-X PaperBot*\n\n"
+    "📚 <b>Downloaded from Learn-X PaperBot</b>\n\n"
     "🔍 Find papers, notes & discussions instantly!\n"
     "🤖 Bot: @FinalPapers_bot\n"
     "📢 Updates: @hLearn_X_Edu"
@@ -1043,7 +1043,7 @@ def send_file_callback(call):
         file_data = files_col.find_one({"_id": ObjectId(call.data)})
         if file_data:
             # Add caption here
-            bot.send_document(call.message.chat.id, file_data['file_id'], caption=DEFAULT_CAPTION, parse_mode="Markdown")
+            bot.send_document(call.message.chat.id, file_data['file_id'], caption=DEFAULT_CAPTION, parse_mode="HTML")
             bot.answer_callback_query(call.id, "Sending file...")
             # Save to history
             history_col.insert_one({"user_id": call.from_user.id, "query": "button_click", "file_sent": file_data['file_name']})
@@ -2137,7 +2137,7 @@ def api_download():
             return jsonify({"ok": False, "error": "File not found"})
         
         # Add caption here
-        bot.send_document(uid, file_data['file_id'], caption=DEFAULT_CAPTION, parse_mode="Markdown")
+        bot.send_document(uid, file_data['file_id'], caption=DEFAULT_CAPTION, parse_mode="HTML")
         
         history_col.insert_one({"user_id": uid, "query": "miniapp_download", "file_sent": file_name})
         if BACKUP_GROUP_ID:

@@ -28,12 +28,15 @@ ADMIN_CHANNEL_ID = os.environ.get('ADMIN_CHANNEL_ID')
 DISCUSSION_AP_MSG_ID = os.environ.get('DISCUSSION_AP_MSG_ID', '')
 DISCUSSION_AD_MSG_ID = os.environ.get('DISCUSSION_AD_MSG_ID', '')
 DISCUSSION_SD_MSG_ID = os.environ.get('DISCUSSION_SD_MSG_ID', '')
-# Setup Caption Variable (Replace with your actual bot/channel usernames)
+# Setup Caption Variable (Updated with symbols and bold text)
 DEFAULT_CAPTION = (
-    "📚 <b>Downloaded from Learn-X PaperBot</b>\n\n"
-    "🔍 Find papers, notes & discussions instantly!\n"
-    "🤖 Bot: @FinalPapers_bot\n"
-    "📢 Updates: @hLearn_X_Edu"
+    "━━━━━━━━━━━━━━‌‌\n"
+    "<b>➥ Downloaded from Learn-X PaperBot</b>\n"
+    "━━━━━━━━━━━━━━‌‌\n\n"
+    "<b>➠ Find papers, notes & discussions instantly!</b>\n"
+    "<b>➠ Bot: @FinalPapers_bot</b>\n"
+    "<b>➠ Updates: @Learn_X_Edu</b>\n"
+    "━━━━━━━━━━━━━━‌‌"
 )
 
 bot = telebot.TeleBot(BOT_TOKEN)

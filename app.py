@@ -2099,7 +2099,7 @@ def api_tutors():
         regex_pattern = r'^' + re.escape(normalize_query(tag)) + r'\b'
         results = list(files_col.find(
             {"file_name": {"$regex": regex_pattern, "$options": "i"}}
-        ).sort("_id", -1).limit(50))
+        ).sort("_id", -1).limit(500))
         files = [{"id": str(f['_id']), "file_name": f['file_name']} for f in results]
         return jsonify({"files": files})
     except Exception as e:

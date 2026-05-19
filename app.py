@@ -629,6 +629,8 @@ def do_broadcast(message):
     success = 0
     failed = 0
     sent_users = set()
+    # Keep compatibility across pyTelegramBotAPI versions: newer uses forward_origin,
+    # while older versions expose forward_* fields.
     is_forwarded_message = any(
         getattr(message, attr, None) is not None
         for attr in (

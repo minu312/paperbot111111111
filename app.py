@@ -1678,9 +1678,30 @@ MINIAPP_HTML = """
 
         // ===== AP VIRTUAL FOLDER STATE =====
         var apAllFiles = [];
+        var apFolderMap = { marking: [], final: [], main: [], full: [], others: [] };
+
+        function buildApFolderMap() {
+            var folders = { marking: [], final: [], main: [], full: [], others: [] };
+            (apAllFiles || []).forEach(function(f) {
+                var name = ((f && f.file_name) || '').toLowerCase();
+                if (name.indexOf('marking') !== -1) {
+                    folders.marking.push(f);
+                } else if (name.indexOf('final') !== -1) {
+                    folders.final.push(f);
+                } else if (name.indexOf('main') !== -1) {
+                    folders.main.push(f);
+                } else if (name.indexOf('full') !== -1) {
+                    folders.full.push(f);
+                } else {
+                    folders.others.push(f);
+                }
+            });
+            apFolderMap = folders;
+        }
 
         function renderApResults(files) {
             apAllFiles = files || [];
+            buildApFolderMap();
             document.getElementById('resultsTitle').textContent = 'Results';
             renderApRoot();
         }
@@ -1689,15 +1710,11 @@ MINIAPP_HTML = """
             const container = document.getElementById('resultsContainer');
             const title = document.getElementById('resultsTitle');
 
-            var finalFiles = apAllFiles.filter(function(f) { return f.file_name.toLowerCase().indexOf('ap final') !== -1; });
-            var mainFiles  = apAllFiles.filter(function(f) { return f.file_name.toLowerCase().indexOf('ap main')  !== -1; });
-            var fullFiles  = apAllFiles.filter(function(f) { return f.file_name.toLowerCase().indexOf('ap full')  !== -1; });
-            var otherFiles = apAllFiles.filter(function(f) {
-                var n = f.file_name.toLowerCase();
-                var startsWithAp = n.startsWith('ap ') || n === 'ap';
-                var notInFolder = n.indexOf('ap final') === -1 && n.indexOf('ap main') === -1 && n.indexOf('ap full') === -1;
-                return startsWithAp && notInFolder;
-            });
+            var markingFiles = apFolderMap.marking || [];
+            var finalFiles = apFolderMap.final || [];
+            var mainFiles = apFolderMap.main || [];
+            var fullFiles = apFolderMap.full || [];
+            var otherFiles = apFolderMap.others || [];
 
             if (!apAllFiles.length) {
                 title.style.display = 'none';
@@ -1708,30 +1725,30 @@ MINIAPP_HTML = """
 
             var html = '';
 
-            if (finalFiles.length) {
-                html += '<div class="ap-folder-btn" onclick="openApFolder(\\'final\\')">'
-                      + '<i class="bi bi-folder-fill text-warning me-2"></i>'
-                      + '<span>final papers</span>'
-                      + '<span class="ap-folder-count">' + finalFiles.length + '</span>'
-                      + '<i class="bi bi-chevron-right text-muted ms-auto"></i>'
-                      + '</div>';
-            }
-            if (mainFiles.length) {
-                html += '<div class="ap-folder-btn" onclick="openApFolder(\\'main\\')">'
-                      + '<i class="bi bi-folder-fill text-warning me-2"></i>'
-                      + '<span>main papers</span>'
-                      + '<span class="ap-folder-count">' + mainFiles.length + '</span>'
-                      + '<i class="bi bi-chevron-right text-muted ms-auto"></i>'
-                      + '</div>';
-            }
-            if (fullFiles.length) {
-                html += '<div class="ap-folder-btn" onclick="openApFolder(\\'full\\')">'
-                      + '<i class="bi bi-folder-fill text-warning me-2"></i>'
-                      + '<span>full papers</span>'
-                      + '<span class="ap-folder-count">' + fullFiles.length + '</span>'
-                      + '<i class="bi bi-chevron-right text-muted ms-auto"></i>'
-                      + '</div>';
-            }
+            html += '<div class="ap-folder-btn" onclick="openApFolder(\\'marking\\')">'
+                  + '<i class="bi bi-folder-fill text-warning me-2"></i>'
+                  + '<span>marking</span>'
+                  + '<span class="ap-folder-count">' + markingFiles.length + '</span>'
+                  + '<i class="bi bi-chevron-right text-muted ms-auto"></i>'
+                  + '</div>';
+            html += '<div class="ap-folder-btn" onclick="openApFolder(\\'final\\')">'
+                  + '<i class="bi bi-folder-fill text-warning me-2"></i>'
+                  + '<span>final papers</span>'
+                  + '<span class="ap-folder-count">' + finalFiles.length + '</span>'
+                  + '<i class="bi bi-chevron-right text-muted ms-auto"></i>'
+                  + '</div>';
+            html += '<div class="ap-folder-btn" onclick="openApFolder(\\'main\\')">'
+                  + '<i class="bi bi-folder-fill text-warning me-2"></i>'
+                  + '<span>main papers</span>'
+                  + '<span class="ap-folder-count">' + mainFiles.length + '</span>'
+                  + '<i class="bi bi-chevron-right text-muted ms-auto"></i>'
+                  + '</div>';
+            html += '<div class="ap-folder-btn" onclick="openApFolder(\\'full\\')">'
+                  + '<i class="bi bi-folder-fill text-warning me-2"></i>'
+                  + '<span>full papers</span>'
+                  + '<span class="ap-folder-count">' + fullFiles.length + '</span>'
+                  + '<i class="bi bi-chevron-right text-muted ms-auto"></i>'
+                  + '</div>';
 
             otherFiles.forEach(function(f) {
                 var renameBtn = isAdmin ? '<button class="delete-btn" style="background: #f59e0b; margin-right: 6px;" onclick=\\'renameFile(' + JSON.stringify(f.id) + ', ' + JSON.stringify(f.file_name).replace(/'/g, "&#39;") + ')\\'><i class="bi bi-pencil"></i></button>' : '';
@@ -1748,9 +1765,8 @@ MINIAPP_HTML = """
         }
 
         function openApFolder(folderType) {
-            var keyword = 'ap ' + folderType;
-            var folderFiles = apAllFiles.filter(function(f) { return f.file_name.toLowerCase().indexOf(keyword) !== -1; });
-            var folderLabel = folderType + ' papers';
+            var folderFiles = apFolderMap[folderType] || [];
+            var folderLabel = folderType === 'marking' ? 'marking' : (folderType + ' papers');
 
             document.getElementById('resultsTitle').textContent = '📁 ' + folderLabel;
             var container = document.getElementById('resultsContainer');

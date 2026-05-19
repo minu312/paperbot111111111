@@ -1694,7 +1694,9 @@ MINIAPP_HTML = """
             var fullFiles  = apAllFiles.filter(function(f) { return f.file_name.toLowerCase().indexOf('ap full')  !== -1; });
             var otherFiles = apAllFiles.filter(function(f) {
                 var n = f.file_name.toLowerCase();
-                return n.indexOf('ap final') === -1 && n.indexOf('ap main') === -1 && n.indexOf('ap full') === -1;
+                var startsWithAp = n.startsWith('ap ') || n === 'ap';
+                var notInFolder = n.indexOf('ap final') === -1 && n.indexOf('ap main') === -1 && n.indexOf('ap full') === -1;
+                return startsWithAp && notInFolder;
             });
 
             if (!apAllFiles.length) {
@@ -2061,8 +2063,9 @@ def api_tutors():
     if not tag:
         return jsonify({"files": [], "error": "Invalid tag"})
     try:
+        regex_pattern = r'^' + re.escape(normalize_query(tag)) + r'\b'
         results = list(files_col.find(
-            {"file_name": {"$regex": re.escape(normalize_query(tag)), "$options": "i"}}
+            {"file_name": {"$regex": regex_pattern, "$options": "i"}}
         ).sort("_id", -1).limit(50))
         files = [{"id": str(f['_id']), "file_name": f['file_name']} for f in results]
         return jsonify({"files": files})

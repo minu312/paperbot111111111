@@ -1665,10 +1665,12 @@ MINIAPP_HTML = """
             }
             title.style.display = 'block';
             container.innerHTML = files.map(function(f) {
+                var renameBtn = isAdmin ? '<button class="delete-btn" style="background: #f59e0b; margin-right: 6px;" onclick=\\'renameFile(' + JSON.stringify(f.id) + ', ' + JSON.stringify(f.file_name).replace(/'/g, "&#39;") + ')\\'><i class="bi bi-pencil"></i></button>' : '';
                 var deleteBtn = isAdmin ? '<button class="delete-btn" onclick=\\'deleteFile(' + JSON.stringify(f.id) + ', ' + JSON.stringify(f.file_name).replace(/'/g, "&#39;") + ')\\'><i class="bi bi-trash"></i></button>' : '';
                 return '<div class="result-card" id="card-' + f.id + '">'
                     + '<span class="result-name"><i class="bi bi-file-earmark-pdf-fill text-danger me-2"></i>' + escapeHtml(f.file_name) + '</span>'
                     + '<button class="download-btn" onclick=\\'downloadFile(' + JSON.stringify(f.id) + ', ' + JSON.stringify(f.file_name).replace(/'/g, "&#39;") + ')\\'><i class="bi bi-download"></i> Get</button>'
+                    + renameBtn
                     + deleteBtn
                     + '</div>';
             }).join('');
@@ -1730,10 +1732,12 @@ MINIAPP_HTML = """
             }
 
             otherFiles.forEach(function(f) {
+                var renameBtn = isAdmin ? '<button class="delete-btn" style="background: #f59e0b; margin-right: 6px;" onclick=\\'renameFile(' + JSON.stringify(f.id) + ', ' + JSON.stringify(f.file_name).replace(/'/g, "&#39;") + ')\\'><i class="bi bi-pencil"></i></button>' : '';
                 var deleteBtn = isAdmin ? '<button class="delete-btn" onclick=\\'deleteFile(' + JSON.stringify(f.id) + ', ' + JSON.stringify(f.file_name).replace(/'/g, "&#39;") + ')\\'><i class="bi bi-trash"></i></button>' : '';
                 html += '<div class="result-card" id="card-' + f.id + '">'
                       + '<span class="result-name"><i class="bi bi-file-earmark-pdf-fill text-danger me-2"></i>' + escapeHtml(f.file_name) + '</span>'
                       + '<button class="download-btn" onclick=\\'downloadFile(' + JSON.stringify(f.id) + ', ' + JSON.stringify(f.file_name).replace(/'/g, "&#39;") + ')\\'><i class="bi bi-download"></i> Get</button>'
+                      + renameBtn
                       + deleteBtn
                       + '</div>';
             });
@@ -1755,10 +1759,12 @@ MINIAPP_HTML = """
                       + '</div>';
 
             folderFiles.forEach(function(f) {
+                var renameBtn = isAdmin ? '<button class="delete-btn" style="background: #f59e0b; margin-right: 6px;" onclick=\\'renameFile(' + JSON.stringify(f.id) + ', ' + JSON.stringify(f.file_name).replace(/'/g, "&#39;") + ')\\'><i class="bi bi-pencil"></i></button>' : '';
                 var deleteBtn = isAdmin ? '<button class="delete-btn" onclick=\\'deleteFile(' + JSON.stringify(f.id) + ', ' + JSON.stringify(f.file_name).replace(/'/g, "&#39;") + ')\\'><i class="bi bi-trash"></i></button>' : '';
                 html += '<div class="result-card" id="card-' + f.id + '">'
                       + '<span class="result-name"><i class="bi bi-file-earmark-pdf-fill text-danger me-2"></i>' + escapeHtml(f.file_name) + '</span>'
                       + '<button class="download-btn" onclick=\\'downloadFile(' + JSON.stringify(f.id) + ', ' + JSON.stringify(f.file_name).replace(/'/g, "&#39;") + ')\\'><i class="bi bi-download"></i> Get</button>'
+                      + renameBtn
                       + deleteBtn
                       + '</div>';
             });
@@ -1980,6 +1986,48 @@ MINIAPP_HTML = """
             }
         }
 
+        function renameFile(fileId, oldName) {
+            if (!isAdmin) return;
+            var userId = tg && tg.initDataUnsafe && tg.initDataUnsafe.user ? tg.initDataUnsafe.user.id : null;
+            if (!userId) { showToast('Admin action requires Telegram.', 3000); return; }
+
+            var input = prompt('Enter new file name:', oldName || '');
+            if (input === null) return;
+
+            var normalizedName = input.trim().toLowerCase();
+            var normalizedOld = (oldName || '').trim().toLowerCase();
+            if (!normalizedName) {
+                showToast('⚠️ File name cannot be empty.', 3000);
+                return;
+            }
+            if (normalizedName === normalizedOld) {
+                showToast('⚠️ New name is the same as current name.', 3000);
+                return;
+            }
+
+            fetch('/api/rename_file', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({file_id: fileId, new_name: normalizedName, user_id: userId})
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.ok) {
+                    var card = document.getElementById('card-' + fileId);
+                    if (card) {
+                        var nameEl = card.querySelector('.result-name');
+                        if (nameEl) {
+                            nameEl.innerHTML = '<i class="bi bi-file-earmark-pdf-fill text-danger me-2"></i>' + escapeHtml(normalizedName);
+                        }
+                    }
+                    showToast('✅ File renamed.', 2500);
+                } else {
+                    showToast('❌ ' + (data.error || 'Failed to rename.'), 3000);
+                }
+            })
+            .catch(function() { showToast('❌ Network error.', 3000); });
+        }
+
     </script>
 </body>
 </html>
@@ -2091,6 +2139,29 @@ def api_delete_file():
     except Exception as e:
         logging.error("API delete_file error: %s", e)
         return jsonify({"ok": False, "error": "Delete failed"}), 500
+
+
+@app.route('/api/rename_file', methods=['POST'])
+def api_rename_file():
+    data = request.get_json(silent=True) or {}
+    file_id = data.get('file_id', '').strip()
+    new_name = data.get('new_name', '')
+    user_id = data.get('user_id')
+    if not file_id or user_id is None or not str(new_name).strip():
+        return jsonify({"ok": False, "error": "Missing parameters"}), 400
+    try:
+        if not is_admin_or_subadmin(int(user_id)):
+            return jsonify({"ok": False, "error": "Unauthorized"}), 403
+        result = files_col.update_one(
+            {"_id": ObjectId(file_id)},
+            {"$set": {"file_name": str(new_name).strip().lower()}}
+        )
+        if result.matched_count:
+            return jsonify({"ok": True})
+        return jsonify({"ok": False, "error": "File not found"}), 404
+    except Exception as e:
+        logging.error("API rename_file error: %s", e)
+        return jsonify({"ok": False, "error": "Rename failed"}), 500
 
 
 @app.route('/api/verify_sub')

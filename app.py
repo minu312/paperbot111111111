@@ -629,6 +629,20 @@ def do_broadcast(message):
     success = 0
     failed = 0
     sent_users = set()
+    # Keep compatibility across pyTelegramBotAPI versions: newer uses forward_origin,
+    # while older versions expose forward_* fields.
+    is_forwarded_message = any(
+        getattr(message, attr, None) is not None
+        for attr in (
+            "forward_origin",
+            "forward_date",
+            "forward_from",
+            "forward_from_chat",
+            "forward_from_message_id",
+            "forward_signature",
+            "forward_sender_name",
+        )
+    )
 
     for user in users_col.find():
         user_id = user.get('user_id')
@@ -636,7 +650,10 @@ def do_broadcast(message):
             continue
         sent_users.add(user_id)
         try:
-            sent_msg = bot.copy_message(chat_id=user_id, from_chat_id=message.chat.id, message_id=message.message_id)
+            if is_forwarded_message:
+                sent_msg = bot.forward_message(chat_id=user_id, from_chat_id=message.chat.id, message_id=message.message_id)
+            else:
+                sent_msg = bot.copy_message(chat_id=user_id, from_chat_id=message.chat.id, message_id=message.message_id)
             broadcast_logs_col.insert_one({
                 "broadcast_id": broadcast_id,
                 "user_id": user_id,

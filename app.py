@@ -1443,8 +1443,8 @@ MINIAPP_HTML = """
 </head>
 <body>
     <div class="app-header">
-        <h1>📚 PaperBot</h1>
-        <p>Find & Download Past Papers Instantly</p>
+        <h1>📚 LearnX PaperBot</h1>
+        <p>Find & Download Papers Instantly</p>
         <div id="adminBadge" class="admin-badge" style="display:none;">🛡️ Admin Mode</div>
     </div>
 

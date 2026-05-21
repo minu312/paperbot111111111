@@ -18,17 +18,7 @@ BOT_TOKEN = os.environ.get('BOT_TOKEN')
 ADMIN_ID = int(os.environ.get('ADMIN_ID', 0))
 ADMIN_GROUP_ID = int(os.environ.get('ADMIN_GROUP_ID', 0))
 BACKUP_GROUP_ID = int(os.environ.get('BACKUP_GROUP_ID', 0))
-
-# Safely parse OTHERS_GROUP_ID to prevent crashes
-try:
-    raw_others = os.environ.get('OTHERS_GROUP_ID')
-    if raw_others and str(raw_others).strip() != "":
-        OTHERS_GROUP_ID = int(str(raw_others).strip())
-    else:
-        OTHERS_GROUP_ID = 0
-except ValueError:
-    OTHERS_GROUP_ID = 0
-
+OTHERS_GROUP_ID = int(os.environ.get('OTHERS_GROUP_ID', -123456789))
 MONGO_URI = os.environ.get('MONGO_URI')
 URL = os.environ.get('HEROKU_APP_URL')
 FORCE_CHANNEL_ID = os.environ.get('FORCE_CHANNEL_ID')  # e.g., "-100123456789"
@@ -39,6 +29,17 @@ ADMIN_CHANNEL_ID = os.environ.get('ADMIN_CHANNEL_ID')
 DISCUSSION_AP_MSG_ID = os.environ.get('DISCUSSION_AP_MSG_ID', '')
 DISCUSSION_AD_MSG_ID = os.environ.get('DISCUSSION_AD_MSG_ID', '')
 DISCUSSION_SD_MSG_ID = os.environ.get('DISCUSSION_SD_MSG_ID', '')
+
+# Setup Caption Variable (Updated with symbols and bold text)
+DEFAULT_CAPTION = (
+    "━━━━━━━━━━━━━━‌‌\n"
+    "<b>➥ Downloaded from Learn-X PaperBot</b>\n"
+    "━━━━━━━━━━━━━━‌‌\n\n"
+    "<b>➠ Find papers, notes & discussions instantly!</b>\n"
+    "<b>➠ Bot: @FinalPapers_bot</b>\n"
+    "<b>➠ Updates: @Learn_X_Edu</b>\n"
+    "━━━━━━━━━━━━━━‌‌"
+)
 
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
@@ -54,6 +55,7 @@ messages_col = db['messages']
 admins_col = db['admins']
 tutor_buttons_col = db['tutor_buttons']
 broadcast_logs_col = db['broadcast_logs']
+banned_users_col = db['banned_users']
 
 DEFAULT_TUTOR_BUTTONS = [
     {"name": "Anuradha Perera", "search_tag": "ap", "image_url": "/static/ap.jpg"},
@@ -71,6 +73,9 @@ def normalize_query(q):
 
 def is_admin_or_subadmin(user_id):
     return user_id == ADMIN_ID or admins_col.count_documents({"user_id": user_id}, limit=1) > 0
+
+def is_banned(user_id):
+    return banned_users_col.find_one({"user_id": user_id}) is not None
 
 def build_miniapp_markup():
     if not URL:
@@ -162,8 +167,6 @@ def send_discussion_tutor_buttons(chat_id, reply_to_message_id=None):
     )
     bot.send_message(chat_id, "Please choose a tutor:", reply_markup=markup, reply_to_message_id=reply_to_message_id)
 
-# ================= FORCE SUBSCRIBE HELPERS =================
-
 def get_subscription_status(user_id):
     if user_id == ADMIN_ID or admins_col.find_one({"user_id": user_id}):
         return {"channel": True, "group": True}
@@ -208,6 +211,8 @@ def enforce_subscription(message):
 def start(message):
     if message.chat.type != 'private':
         return
+    if is_banned(message.from_user.id):
+        return
     if not enforce_subscription(message):
         return
     user_id = message.from_user.id
@@ -228,6 +233,8 @@ def start(message):
 @bot.message_handler(commands=['help'])
 def help_command(message):
     if message.chat.type != 'private':
+        return
+    if is_banned(message.from_user.id):
         return
     if not enforce_subscription(message):
         return
@@ -402,8 +409,7 @@ def remove_tutor_button(message):
         bot.reply_to(message, "⚠️ Failed to remove tutor button. Please try again.")
 
 def _forward_user_submission(message, file_name=None):
-    """Forward a user's file/media submission to OTHERS_GROUP_ID robustly."""
-    if not OTHERS_GROUP_ID or OTHERS_GROUP_ID == -123456789:
+    if not OTHERS_GROUP_ID:
         return
     user = message.from_user
     first = user.first_name or ""
@@ -416,21 +422,11 @@ def _forward_user_submission(message, file_name=None):
         f"{fn_line}"
         f"\n*(Reply to this message to answer the user)*"
     )
-    
-    # Try forward first, fallback to copy if user privacy restricts forwarding
     try:
         bot.forward_message(OTHERS_GROUP_ID, message.chat.id, message.message_id)
-    except Exception:
-        try:
-            bot.copy_message(OTHERS_GROUP_ID, message.chat.id, message.message_id)
-        except Exception:
-            pass
-            
-    # Send info message separately to ensure it always goes through
-    try:
         bot.send_message(OTHERS_GROUP_ID, info_text)
     except Exception as e:
-        logging.error("Failed to send user submission info: %s", e)
+        logging.error("Failed to forward user submission: %s", e)
 
 @bot.message_handler(content_types=['document'])
 def handle_docs(message):
@@ -480,7 +476,8 @@ def handle_media(message):
     message.chat.id in [ADMIN_GROUP_ID, OTHERS_GROUP_ID, BACKUP_GROUP_ID] and
     message.reply_to_message is not None and
     message.reply_to_message.from_user is not None and
-    message.reply_to_message.from_user.id == bot.get_me().id
+    message.reply_to_message.from_user.id == bot.get_me().id and
+    not (message.text and message.text.startswith('/'))
 ), content_types=['text'])
 def admin_reply_to_user(message):
     sender_id = message.from_user.id
@@ -506,6 +503,72 @@ def admin_reply_to_user(message):
     except Exception:
         bot.reply_to(message, "❌ Failed to send reply. The user may have blocked the bot.")
 
+def extract_target_user_id(message):
+    command_text = (message.text or message.caption or '').strip()
+    parts = command_text.split(None, 1)
+    if len(parts) >= 2 and parts[1].strip():
+        raw_id = parts[1].strip()
+        if re.fullmatch(r'\d+', raw_id):
+            return int(raw_id)
+        bot.reply_to(message, "⚠️ Invalid user ID. Please provide a numeric user ID.")
+        return None
+    replied = message.reply_to_message
+    if not replied:
+        bot.reply_to(message, "⚠️ Please provide a user ID or reply to the info message that contains the user's ID.")
+        return None
+    text_to_search = replied.text or replied.caption or ''
+    match = re.search(r'ID: (\d+)', text_to_search)
+    if match:
+        return int(match.group(1))
+    if replied.forward_from:
+        return replied.forward_from.id
+    bot.reply_to(message, "⚠️ Could not find the User ID. Please reply to the info message that contains the user's ID.")
+    return None
+
+@bot.message_handler(commands=['ban'], func=lambda message: (
+    message.chat.id in [ADMIN_GROUP_ID, BACKUP_GROUP_ID, OTHERS_GROUP_ID]
+))
+def ban_user(message):
+    sender_id = message.from_user.id
+    if not is_admin_or_subadmin(sender_id):
+        bot.reply_to(message, "⚠️ You do not have permission to ban users.")
+        return
+    user_id = extract_target_user_id(message)
+    if user_id is None:
+        return
+    if user_id == bot.get_me().id:
+        bot.reply_to(message, "⚠️ Invalid target user ID.")
+        return
+    if is_admin_or_subadmin(user_id):
+        bot.reply_to(message, "⚠️ You cannot ban an admin or sub-admin.")
+        return
+    if is_banned(user_id):
+        bot.reply_to(message, "⚠️ User is already in the banned list.")
+        return
+    banned_users_col.insert_one({
+        "user_id": user_id,
+        "banned_at": datetime.now(timezone.utc),
+        "banned_by": sender_id
+    })
+    bot.reply_to(message, f"✅ User {user_id} has been banned.")
+
+@bot.message_handler(commands=['unban'], func=lambda message: (
+    message.chat.id in [ADMIN_GROUP_ID, BACKUP_GROUP_ID, OTHERS_GROUP_ID]
+))
+def unban_user(message):
+    sender_id = message.from_user.id
+    if not is_admin_or_subadmin(sender_id):
+        bot.reply_to(message, "⚠️ You do not have permission to unban users.")
+        return
+    user_id = extract_target_user_id(message)
+    if user_id is None:
+        return
+    result = banned_users_col.delete_one({"user_id": user_id})
+    if result.deleted_count == 0:
+        bot.reply_to(message, "⚠️ User is not in the banned list.")
+        return
+    bot.reply_to(message, f"✅ User {user_id} has been unbanned.")
+
 @bot.message_handler(commands=['broadcast'])
 def broadcast(message):
     if message.chat.type != 'private':
@@ -519,17 +582,13 @@ def do_broadcast(message):
     if message.from_user.id != ADMIN_ID:
         logging.warning("Unauthorized do_broadcast attempt from user_id %s", message.from_user.id)
         return
-
     if message.text and message.text.strip().lower() == 'end broadcast':
         bot.reply_to(message, "✅ Broadcast cancelled.")
         return
-
     broadcast_id = str(uuid.uuid4())[:8]
     success = 0
     failed = 0
     sent_users = set()
-    
-    # Check if the message has a forward tag (from a channel or user)
     is_forwarded_message = any(
         getattr(message, attr, None) is not None
         for attr in (
@@ -537,19 +596,16 @@ def do_broadcast(message):
             "forward_from_message_id", "forward_signature", "forward_sender_name",
         )
     )
-
     for user in users_col.find():
         user_id = user.get('user_id')
         if user_id in sent_users:
             continue
         sent_users.add(user_id)
         try:
-            # Use forward_message if it's from a channel, else use copy_message
             if is_forwarded_message:
                 sent_msg = bot.forward_message(chat_id=user_id, from_chat_id=message.chat.id, message_id=message.message_id)
             else:
                 sent_msg = bot.copy_message(chat_id=user_id, from_chat_id=message.chat.id, message_id=message.message_id)
-            
             broadcast_logs_col.insert_one({
                 "broadcast_id": broadcast_id,
                 "user_id": user_id,
@@ -559,7 +615,6 @@ def do_broadcast(message):
         except Exception as e:
             logging.warning("Broadcast failed for user_id %s: %s", user_id, e)
             failed += 1
-
     bot.send_message(
         message.chat.id,
         f"✅ Broadcast complete! Broadcast ID: {broadcast_id}\n"
@@ -682,33 +737,25 @@ def _build_search_page_markup(results, page, total, query_str):
         markup.row(*nav_row)
     return markup
 
-# Handler 1: When a user sends a text message
 @bot.message_handler(func=lambda message: True, content_types=['text'])
 def search_files_text(message):
     if message.chat.type != 'private':
+        return
+    if is_banned(message.from_user.id):
         return
     if not enforce_subscription(message):
         return
     if message.text.startswith('/'):
         return
         
-    user = message.from_user
-    
-    # Forward EVERYTHING the user types to OTHERS_GROUP_ID (so no text is missed)
-    is_admin = user.id == ADMIN_ID
-    is_subadmin = admins_col.count_documents({"user_id": user.id}, limit=1) > 0
-    if not is_admin and not is_subadmin:
-        _forward_user_submission(message)
-        
     query = normalize_query(message.text.lower())
-    
+    user = message.from_user
     messages_col.insert_one({
         "user_id": user.id,
         "username": user.username or user.first_name or str(user.id),
         "message": message.text,
         "timestamp": datetime.now(timezone.utc)
     })
-    
     if BACKUP_GROUP_ID:
         try:
             username_display = f"@{user.username}" if user.username else str(user.id)
@@ -799,10 +846,14 @@ def search_files_text(message):
 
     if not total_count:
         bot.reply_to(message, "Sorry, no papers were found matching that name.")
+        user_id = message.from_user.id
+        is_admin = user_id == ADMIN_ID
+        is_subadmin = admins_col.count_documents({"user_id": user_id}, limit=1) > 0
+        if not is_admin and not is_subadmin:
+            _forward_user_submission(message)
         return
 
     results = list(files_col.find({"file_name": {"$regex": query}}).sort("_id", -1).limit(PAGE_SIZE))
-
     markup = _build_search_page_markup(results, 0, total_count, query)
     bot.reply_to(message, "🔍 Here are the papers I found. Click on a paper below to download it:", reply_markup=markup)
 
@@ -863,7 +914,6 @@ def verify_subscription_callback(call):
         except Exception:
             pass
 
-
 @bot.callback_query_handler(func=lambda call: call.data.startswith('discussion_tutor:'))
 def discussion_tutor_callback(call):
     tutor = call.data.split(':', 1)[1] if ':' in call.data else ""
@@ -877,7 +927,6 @@ def discussion_tutor_callback(call):
         bot.answer_callback_query(call.id, "Failed to send discussions", show_alert=True)
         bot.send_message(call.message.chat.id, err)
 
-
 def _build_backup_notification(source, full_name, username_display, user_id, file_name):
     label = "Mini App Download" if source == "miniapp" else "Bot Download"
     return (
@@ -888,7 +937,6 @@ def _build_backup_notification(source, full_name, username_display, user_id, fil
         f"File: `{file_name}`"
     )
 
-
 def _build_browse_markup(path):
     markup = InlineKeyboardMarkup()
     markup.row_width = 2
@@ -898,7 +946,6 @@ def _build_browse_markup(path):
             all_distinct = files_col.distinct("folder", {"folder": {"$regex": f"^{re.escape(path)}/"}})
         else:
             all_distinct = files_col.distinct("folder")
-
         subfolders = set()
         for f in all_distinct:
             if not f or f == path:
@@ -907,17 +954,14 @@ def _build_browse_markup(path):
                 rest = f[len(prefix):]
                 if rest:
                     subfolders.add(rest.split('/')[0])
-
         for sf in sorted(subfolders):
             full_path = prefix + sf
             cb = f"browse:{full_path}"
             if len(cb.encode()) <= 64:
                 markup.add(InlineKeyboardButton(f"📂 {sf}", callback_data=cb))
-
         files_at_level = list(files_col.find({"folder": path}).limit(20))
         for f in files_at_level:
             markup.add(InlineKeyboardButton(f"📄 {f['file_name'][:30]}", callback_data=str(f['_id'])))
-
         if path:
             parent = path.rsplit('/', 1)[0] if '/' in path else ""
             markup.add(InlineKeyboardButton("⬅️ Back", callback_data=f"browse:{parent}"))
@@ -925,10 +969,9 @@ def _build_browse_markup(path):
         logging.error("_build_browse_markup error: %s", e)
     return markup
 
-
 @bot.callback_query_handler(func=lambda call: call.data.startswith('browse:'))
 def browse_callback(call):
-    path = call.data[7:] 
+    path = call.data[7:]  
     markup = _build_browse_markup(path)
     path_display = path if path else "Root"
     text = f"📂 Browse: {path_display}\n\nSelect a folder or file:"
@@ -938,13 +981,14 @@ def browse_callback(call):
     except Exception:
         bot.answer_callback_query(call.id, "Updated")
 
-
 @bot.callback_query_handler(func=lambda call: call.data != 'verify_sub' and len(call.data) == 24)
 def send_file_callback(call):
+    if is_banned(call.from_user.id):
+        return
     try:
         file_data = files_col.find_one({"_id": ObjectId(call.data)})
         if file_data:
-            bot.send_document(call.message.chat.id, file_data['file_id'])
+            bot.send_document(call.message.chat.id, file_data['file_id'], caption=DEFAULT_CAPTION, parse_mode="HTML")
             bot.answer_callback_query(call.id, "Sending file...")
             history_col.insert_one({"user_id": call.from_user.id, "query": "button_click", "file_sent": file_data['file_name']})
             if BACKUP_GROUP_ID:
@@ -961,12 +1005,10 @@ def send_file_callback(call):
     except Exception as e:
         bot.answer_callback_query(call.id, "An error occurred. Please try again.", show_alert=True)
 
-
 @bot.inline_handler(lambda query: len(query.query) > 0)
 def query_text(inline_query):
     query = normalize_query(inline_query.query.lower())
     results = files_col.find({"file_name": {"$regex": query}}).limit(10)
-    
     inline_results = []
     for f in results:
         res = InlineQueryResultCachedDocument(
@@ -1401,8 +1443,8 @@ MINIAPP_HTML = """
 </head>
 <body>
     <div class="app-header">
-        <h1>📚 PaperBot</h1>
-        <p>Find & Download Past Papers Instantly</p>
+        <h1>📚 LearnX PaperBot</h1>
+        <p>Find & Download Papers Instantly</p>
         <div id="adminBadge" class="admin-badge" style="display:none;">🛡️ Admin Mode</div>
     </div>
 
@@ -1438,7 +1480,7 @@ MINIAPP_HTML = """
         </div>
     </div>
 
-    <div id="subOverlay" style="display:flex;" class="sub-overlay">
+    <div id="subOverlay" style="display:none;" class="sub-overlay">
         <div style="font-size:2.5rem;margin-bottom:12px;">🔒</div>
         <h2>Access Restricted</h2>
         <p>You must join our official Channel &amp; Group to use PaperBot.</p>
@@ -1456,15 +1498,28 @@ MINIAPP_HTML = """
             document.body.style.background = tg.themeParams.bg_color || '#f5f7fa';
         }
 
+        function getDeviceInfo() {
+            return { platform: (tg && tg.platform) ? tg.platform : 'unknown', userAgent: navigator.userAgent };
+        }
+
         (function checkSubscription() {
             if (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) {
                 const userId = tg.initDataUnsafe.user.id;
                 fetch('/api/verify_sub?user_id=' + encodeURIComponent(userId))
                     .then(function(r) { return r.json(); })
                     .then(function(data) {
+                        if (data.banned) {
+                            const overlay = document.getElementById('subOverlay');
+                            overlay.style.display = 'flex';
+                            overlay.innerHTML = '<div style="font-size:2.5rem;margin-bottom:12px;">🚫</div>' +
+                                                '<h2>Access Denied</h2>' +
+                                                '<p>You have been permanently banned from using PaperBot.</p>';
+                            return;
+                        }
                         if (data.subscribed) {
                             document.getElementById('subOverlay').style.display = 'none';
                         } else {
+                            document.getElementById('subOverlay').style.display = 'flex';
                             const linksDiv = document.getElementById('subOverlayLinks');
                             linksDiv.innerHTML = '';
                             if (data.channel_url) {
@@ -1487,7 +1542,7 @@ MINIAPP_HTML = """
                             }
                         }
                     })
-                    .catch(function() { });
+                    .catch(function() {});
             }
         })();
 
@@ -1516,10 +1571,12 @@ MINIAPP_HTML = """
             }
             title.style.display = 'block';
             container.innerHTML = files.map(function(f) {
+                var renameBtn = isAdmin ? '<button class="delete-btn" style="background: #f59e0b; margin-right: 6px;" onclick=\\'renameFile(' + JSON.stringify(f.id) + ', ' + JSON.stringify(f.file_name).replace(/'/g, "&#39;") + ')\\'><i class="bi bi-pencil-square"></i></button>' : '';
                 var deleteBtn = isAdmin ? '<button class="delete-btn" onclick=\\'deleteFile(' + JSON.stringify(f.id) + ', ' + JSON.stringify(f.file_name).replace(/'/g, "&#39;") + ')\\'><i class="bi bi-trash"></i></button>' : '';
                 return '<div class="result-card" id="card-' + f.id + '">'
                     + '<span class="result-name"><i class="bi bi-file-earmark-pdf-fill text-danger me-2"></i>' + escapeHtml(f.file_name) + '</span>'
                     + '<button class="download-btn" onclick=\\'downloadFile(' + JSON.stringify(f.id) + ', ' + JSON.stringify(f.file_name).replace(/'/g, "&#39;") + ')\\'><i class="bi bi-download"></i> Get</button>'
+                    + renameBtn
                     + deleteBtn
                     + '</div>';
             }).join('');
@@ -1537,12 +1594,25 @@ MINIAPP_HTML = """
             const container = document.getElementById('resultsContainer');
             const title = document.getElementById('resultsTitle');
 
-            var finalFiles = apAllFiles.filter(function(f) { return f.file_name.toLowerCase().indexOf('ap final') !== -1; });
-            var mainFiles  = apAllFiles.filter(function(f) { return f.file_name.toLowerCase().indexOf('ap main')  !== -1; });
-            var fullFiles  = apAllFiles.filter(function(f) { return f.file_name.toLowerCase().indexOf('ap full')  !== -1; });
+            var markingFiles = apAllFiles.filter(function(f) {
+                var n = f.file_name.toLowerCase();
+                return n.indexOf('marking') !== -1;
+            });
+            var finalFiles = apAllFiles.filter(function(f) { 
+                var n = f.file_name.toLowerCase();
+                return n.indexOf('ap final') !== -1 && n.indexOf('marking') === -1; 
+            });
+            var mainFiles  = apAllFiles.filter(function(f) { 
+                var n = f.file_name.toLowerCase();
+                return n.indexOf('ap main') !== -1 && n.indexOf('marking') === -1; 
+            });
+            var fullFiles  = apAllFiles.filter(function(f) { 
+                var n = f.file_name.toLowerCase();
+                return n.indexOf('ap full') !== -1 && n.indexOf('marking') === -1; 
+            });
             var otherFiles = apAllFiles.filter(function(f) {
                 var n = f.file_name.toLowerCase();
-                return n.indexOf('ap final') === -1 && n.indexOf('ap main') === -1 && n.indexOf('ap full') === -1;
+                return n.indexOf('ap final') === -1 && n.indexOf('ap main') === -1 && n.indexOf('ap full') === -1 && n.indexOf('marking') === -1;
             });
 
             if (!apAllFiles.length) {
@@ -1554,6 +1624,14 @@ MINIAPP_HTML = """
 
             var html = '';
 
+            if (markingFiles.length) {
+                html += '<div class="ap-folder-btn" onclick="openApFolder(\\'marking\\')">'
+                      + '<i class="bi bi-folder-fill text-warning me-2"></i>'
+                      + '<span>markings</span>'
+                      + '<span class="ap-folder-count">' + markingFiles.length + '</span>'
+                      + '<i class="bi bi-chevron-right text-muted ms-auto"></i>'
+                      + '</div>';
+            }
             if (finalFiles.length) {
                 html += '<div class="ap-folder-btn" onclick="openApFolder(\\'final\\')">'
                       + '<i class="bi bi-folder-fill text-warning me-2"></i>'
@@ -1580,10 +1658,12 @@ MINIAPP_HTML = """
             }
 
             otherFiles.forEach(function(f) {
+                var renameBtn = isAdmin ? '<button class="delete-btn" style="background: #f59e0b; margin-right: 6px;" onclick=\\'renameFile(' + JSON.stringify(f.id) + ', ' + JSON.stringify(f.file_name).replace(/'/g, "&#39;") + ')\\'><i class="bi bi-pencil-square"></i></button>' : '';
                 var deleteBtn = isAdmin ? '<button class="delete-btn" onclick=\\'deleteFile(' + JSON.stringify(f.id) + ', ' + JSON.stringify(f.file_name).replace(/'/g, "&#39;") + ')\\'><i class="bi bi-trash"></i></button>' : '';
                 html += '<div class="result-card" id="card-' + f.id + '">'
                       + '<span class="result-name"><i class="bi bi-file-earmark-pdf-fill text-danger me-2"></i>' + escapeHtml(f.file_name) + '</span>'
                       + '<button class="download-btn" onclick=\\'downloadFile(' + JSON.stringify(f.id) + ', ' + JSON.stringify(f.file_name).replace(/'/g, "&#39;") + ')\\'><i class="bi bi-download"></i> Get</button>'
+                      + renameBtn
                       + deleteBtn
                       + '</div>';
             });
@@ -1592,23 +1672,36 @@ MINIAPP_HTML = """
         }
 
         function openApFolder(folderType) {
-            var keyword = 'ap ' + folderType;
-            var folderFiles = apAllFiles.filter(function(f) { return f.file_name.toLowerCase().indexOf(keyword) !== -1; });
-            var folderLabel = folderType + ' papers';
+            var folderFiles = [];
+            var folderLabel = folderType === 'marking' ? 'markings' : (folderType + ' papers');
+
+            if (folderType === 'marking') {
+                folderFiles = apAllFiles.filter(function(f) {
+                    return f.file_name.toLowerCase().indexOf('marking') !== -1;
+                });
+            } else {
+                var keyword = 'ap ' + folderType;
+                folderFiles = apAllFiles.filter(function(f) {
+                    var n = f.file_name.toLowerCase();
+                    return n.indexOf(keyword) !== -1 && n.indexOf('marking') === -1;
+                });
+            }
 
             document.getElementById('resultsTitle').textContent = '📁 ' + folderLabel;
             var container = document.getElementById('resultsContainer');
 
             var html = '<div class="ap-folder-btn ap-back-btn" onclick="backToApRoot()">'
-                      + '<i class="bi bi-arrow-left-circle-fill text-secondary me-2"></i>'
-                      + '<span>← Back</span>'
-                      + '</div>';
+                     + '<i class="bi bi-arrow-left-circle-fill text-secondary me-2"></i>'
+                     + '<span>← Back</span>'
+                     + '</div>';
 
             folderFiles.forEach(function(f) {
+                var renameBtn = isAdmin ? '<button class="delete-btn" style="background: #f59e0b; margin-right: 6px;" onclick=\\'renameFile(' + JSON.stringify(f.id) + ', ' + JSON.stringify(f.file_name).replace(/'/g, "&#39;") + ')\\'><i class="bi bi-pencil-square"></i></button>' : '';
                 var deleteBtn = isAdmin ? '<button class="delete-btn" onclick=\\'deleteFile(' + JSON.stringify(f.id) + ', ' + JSON.stringify(f.file_name).replace(/'/g, "&#39;") + ')\\'><i class="bi bi-trash"></i></button>' : '';
                 html += '<div class="result-card" id="card-' + f.id + '">'
                       + '<span class="result-name"><i class="bi bi-file-earmark-pdf-fill text-danger me-2"></i>' + escapeHtml(f.file_name) + '</span>'
                       + '<button class="download-btn" onclick=\\'downloadFile(' + JSON.stringify(f.id) + ', ' + JSON.stringify(f.file_name).replace(/'/g, "&#39;") + ')\\'><i class="bi bi-download"></i> Get</button>'
+                      + renameBtn
                       + deleteBtn
                       + '</div>';
             });
@@ -1616,7 +1709,6 @@ MINIAPP_HTML = """
             if (!folderFiles.length) {
                 html += '<div class="empty-state"><i class="bi bi-inbox"></i><p>No files in ' + escapeHtml(folderLabel) + '.</p></div>';
             }
-
             container.innerHTML = html;
         }
 
@@ -1628,18 +1720,15 @@ MINIAPP_HTML = """
         function escapeHtml(str) {
             return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
         }
-
         function escapeAttr(str) {
             return escapeHtml(str).replace(/'/g, '&#39;');
         }
-
         function initials(name) {
-            const parts = (name || '').trim().split(/\\s+/).filter(Boolean);
+            const parts = (name || '').trim().split(/\s+/).filter(Boolean);
             if (!parts.length) return 'PB';
             if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
             return (parts[0][0] + parts[1][0]).toUpperCase();
         }
-
         function tutorFallbackSvg(label) {
             const txt = encodeURIComponent(label);
             return 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" fill="%234f86c6"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="white" font-size="60">' + txt + '</text></svg>';
@@ -1669,9 +1758,7 @@ MINIAPP_HTML = """
                             + '</button>';
                     }).join('');
                 })
-                .catch(function() {
-                    showToast('Failed to load tutor buttons.');
-                });
+                .catch(function() { showToast('Failed to load tutor buttons.'); });
         }
 
         function doSearch() {
@@ -1756,7 +1843,15 @@ MINIAPP_HTML = """
                 fetch('/api/download', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({file_id: fileId, user_id: userId, file_name: fileName, username: username, first_name: firstName, last_name: lastName})
+                    body: JSON.stringify({
+                        file_id: fileId, 
+                        user_id: userId, 
+                        file_name: fileName, 
+                        username: username, 
+                        first_name: firstName, 
+                        last_name: lastName,
+                        device: getDeviceInfo()
+                    })
                 })
                 .then(function(r) { return r.json(); })
                 .then(function(data) {
@@ -1775,9 +1870,41 @@ MINIAPP_HTML = """
             }
         }
 
+        function renameFile(fileId, oldName) {
+            if (!isAdmin) return;
+            var userId = tg && tg.initDataUnsafe && tg.initDataUnsafe.user ? tg.initDataUnsafe.user.id : null;
+            if (!userId) { showToast('Admin action requires Telegram.', 3000); return; }
+            
+            var newName = prompt("Enter new file name:", oldName);
+            if (newName !== null && newName.trim() !== "" && newName.trim() !== oldName) {
+                fetch('/api/rename_file', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({file_id: fileId, new_name: newName, user_id: userId})
+                })
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    if (data.ok) {
+                        showToast('✅ File renamed successfully.', 2500);
+                        var card = document.getElementById('card-' + fileId);
+                        if (card) {
+                            var nameSpan = card.querySelector('.result-name');
+                            if (nameSpan) {
+                                nameSpan.innerHTML = '<i class="bi bi-file-earmark-pdf-fill text-danger me-2"></i>' + escapeHtml(newName.trim().toLowerCase());
+                            }
+                        }
+                    } else {
+                        showToast('❌ ' + (data.error || 'Failed to rename.'), 3000);
+                    }
+                })
+                .catch(function() { showToast('❌ Network error.', 3000); });
+            }
+        }
+
         document.getElementById('searchInput').addEventListener('keydown', function(e) {
             if (e.key === 'Enter') doSearch();
         });
+        
         loadTutorButtons();
         checkAdminMode();
 
@@ -1825,7 +1952,6 @@ MINIAPP_HTML = """
                 if (confirm('Are you sure you want to delete "' + fileName + '"?')) doDelete();
             }
         }
-
     </script>
 </body>
 </html>
@@ -1834,7 +1960,6 @@ MINIAPP_HTML = """
 @app.route('/miniapp')
 def miniapp():
     return render_template_string(MINIAPP_HTML)
-
 
 @app.route('/api/search')
 def api_search():
@@ -1851,27 +1976,26 @@ def api_search():
         logging.error("API search error: %s", e)
         return jsonify({"files": [], "error": "Database error"}), 500
 
-
 @app.route('/api/tutors')
 def api_tutors():
     tag = request.args.get('tag', '').strip().lower()
     if not tag:
         return jsonify({"files": [], "error": "Invalid tag"})
     try:
+        # Matches 'tag' explicitly avoiding substring issues
+        regex_pattern = r'\b' + re.escape(normalize_query(tag)) + r'\b'
         results = list(files_col.find(
-            {"file_name": {"$regex": re.escape(normalize_query(tag)), "$options": "i"}}
-        ).sort("_id", -1).limit(50))
+            {"file_name": {"$regex": regex_pattern, "$options": "i"}}
+        ).sort("_id", -1).limit(500))
         files = [{"id": str(f['_id']), "file_name": f['file_name']} for f in results]
         return jsonify({"files": files})
     except Exception as e:
         logging.error("API tutors error: %s", e)
         return jsonify({"files": [], "error": "Database error"}), 500
 
-
 @app.route('/api/tutor-buttons')
 def api_tutor_buttons():
     return jsonify({"tutors": get_tutor_buttons()})
-
 
 @app.route('/api/tutor-image/<tutor_id>')
 def api_tutor_image(tutor_id):
@@ -1886,7 +2010,6 @@ def api_tutor_image(tutor_id):
     except Exception as e:
         logging.error("Failed to fetch tutor image: %s", e)
         return "", 404
-
 
 @app.route('/api/discussions/send', methods=['POST'])
 def api_discussions_send():
@@ -1907,7 +2030,6 @@ def api_discussions_send():
         logging.error("API discussions send error: %s", e)
         return jsonify({"ok": False, "error": "Failed to send discussions"}), 500
 
-
 @app.route('/api/check_admin')
 def api_check_admin():
     user_id = request.args.get('user_id')
@@ -1918,6 +2040,30 @@ def api_check_admin():
     except Exception:
         return jsonify({"is_admin": False})
 
+@app.route('/api/rename_file', methods=['POST'])
+def api_rename_file():
+    data = request.get_json(silent=True) or {}
+    file_id = data.get('file_id', '').strip()
+    new_name = data.get('new_name', '').strip().lower()
+    user_id = data.get('user_id')
+
+    if not file_id or not new_name or user_id is None:
+        return jsonify({"ok": False, "error": "Missing parameters"}), 400
+
+    try:
+        if not is_admin_or_subadmin(int(user_id)):
+            return jsonify({"ok": False, "error": "Unauthorized"}), 403
+
+        result = files_col.update_one(
+            {"_id": ObjectId(file_id)},
+            {"$set": {"file_name": new_name}}
+        )
+        if result.matched_count:
+            return jsonify({"ok": True})
+        return jsonify({"ok": False, "error": "File not found"}), 404
+    except Exception as e:
+        logging.error("API rename_file error: %s", e)
+        return jsonify({"ok": False, "error": "Rename failed"}), 500
 
 @app.route('/api/delete_file', methods=['POST'])
 def api_delete_file():
@@ -1937,14 +2083,17 @@ def api_delete_file():
         logging.error("API delete_file error: %s", e)
         return jsonify({"ok": False, "error": "Delete failed"}), 500
 
-
 @app.route('/api/verify_sub')
 def api_verify_sub():
     user_id = request.args.get('user_id')
     if not user_id:
         return jsonify({"subscribed": False, "error": "Missing user_id"}), 400
     try:
-        status = get_subscription_status(int(user_id))
+        uid = int(user_id)
+        if is_banned(uid):
+            return jsonify({"subscribed": False, "banned": True})
+            
+        status = get_subscription_status(uid)
         subscribed = status["channel"] and status["group"]
         result = {"subscribed": subscribed}
         if not status["channel"] and FORCE_CHANNEL_URL:
@@ -1956,9 +2105,13 @@ def api_verify_sub():
         logging.error("API verify_sub error: %s", e)
         return jsonify({"subscribed": False, "error": "Check failed"})
 
-
 @app.route('/api/download', methods=['POST'])
 def api_download():
+    # Capture user IP address from headers
+    user_ip = request.headers.get('X-Forwarded-For', request.remote_addr)
+    if user_ip:
+        user_ip = user_ip.split(',')[0].strip()
+
     data = request.get_json(silent=True) or {}
     file_id = data.get('file_id', '').strip()
     user_id = data.get('user_id')
@@ -1966,22 +2119,38 @@ def api_download():
     username = data.get('username', '')
     first_name = data.get('first_name', '')
     last_name = data.get('last_name', '')
+    device_info = data.get('device', {})
+
     if not file_id or not user_id:
         return jsonify({"ok": False, "error": "Missing file_id or user_id"})
     try:
-        status = get_subscription_status(int(user_id))
+        uid = int(user_id)
+        if is_banned(uid):
+            return jsonify({"ok": False, "error": "banned"})
+            
+        status = get_subscription_status(uid)
         if not status["channel"] or not status["group"]:
             return jsonify({"ok": False, "error": "subscription_required"})
+        
         file_data = files_col.find_one({"_id": ObjectId(file_id)})
         if not file_data:
             return jsonify({"ok": False, "error": "File not found"})
-        bot.send_document(int(user_id), file_data['file_id'])
-        history_col.insert_one({"user_id": int(user_id), "query": "miniapp_download", "file_sent": file_name})
+        
+        bot.send_document(uid, file_data['file_id'], caption=DEFAULT_CAPTION, parse_mode="HTML")
+        
+        history_col.insert_one({
+            "user_id": uid, 
+            "query": "miniapp_download", 
+            "file_sent": file_name,
+            "ip_address": user_ip,
+            "device_info": device_info
+        })
+        
         if BACKUP_GROUP_ID:
             try:
-                full_name = ' '.join(filter(None, [first_name, last_name])) or str(user_id)
+                full_name = ' '.join(filter(None, [first_name, last_name])) or str(uid)
                 username_display = f"@{username}" if username else "No username"
-                backup_text = _build_backup_notification("miniapp", full_name, username_display, user_id, file_name)
+                backup_text = _build_backup_notification("miniapp", full_name, username_display, uid, file_name)
                 bot.send_message(BACKUP_GROUP_ID, backup_text, parse_mode="Markdown")
             except Exception as e:
                 logging.error(f"Failed to send backup msg: {e}")
@@ -1989,7 +2158,6 @@ def api_download():
     except Exception as e:
         logging.error("API download error: %s", e)
         return jsonify({"ok": False, "error": "Failed to send file"})
-
 
 if __name__ == '__main__':
     bot.remove_webhook()

@@ -2156,6 +2156,26 @@ def api_download():
                 bot.send_message(BACKUP_GROUP_ID, backup_text, parse_mode="Markdown")
             except Exception as e:
                 logging.error(f"Failed to send backup msg: {e}")
+                # ---- ADD THIS BLOCK ----
+if MINIAPP_BACKUP_GROUP_ID:
+    try:
+        full_name = ' '.join(filter(None, [first_name, last_name])) or str(uid)
+        username_display = f"@{username}" if username else "No username"
+        ip_info = user_ip or "N/A"
+        browser = (device_info.get('userAgent') if isinstance(device_info, dict) else str(device_info)) or "N/A"
+        text = (
+            f"🌐 *MiniApp Download*\n"
+            f"User: {full_name}\n"
+            f"Username: {username_display}\n"
+            f"ID: `{uid}`\n"
+            f"IP: `{ip_info}`\n"
+            f"Browser: `{browser}`\n"
+            f"File: `{file_name}`"
+        )
+        bot.send_message(MINIAPP_BACKUP_GROUP_ID, text, parse_mode="Markdown")
+    except Exception as e:
+        logging.error(f"Failed to send MiniApp backup msg: {e}")
+# ---- END OF ADDED BLOCK ----
         return jsonify({"ok": True})
     except Exception as e:
         logging.error("API download error: %s", e)

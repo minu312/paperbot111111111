@@ -13,12 +13,22 @@ from html import escape
 from urllib.parse import urlparse
 from urllib.request import urlopen
 
+# Safely parse integer environment variables to prevent crashes
+def safe_int(val, default=0):
+    try:
+        if not val:
+            return default
+        return int(str(val).strip())
+    except (TypeError, ValueError):
+        return default
+
 # Environment Variables (Set these in Heroku Settings -> Config Vars)
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
-ADMIN_ID = int(os.environ.get('ADMIN_ID', 0))
-ADMIN_GROUP_ID = int(os.environ.get('ADMIN_GROUP_ID', 0))
-BACKUP_GROUP_ID = int(os.environ.get('BACKUP_GROUP_ID', 0))
-OTHERS_GROUP_ID = int(os.environ.get('OTHERS_GROUP_ID', -123456789))
+ADMIN_ID = safe_int(os.environ.get('ADMIN_ID'))
+ADMIN_GROUP_ID = safe_int(os.environ.get('ADMIN_GROUP_ID'))
+BACKUP_GROUP_ID = safe_int(os.environ.get('BACKUP_GROUP_ID'))
+MINIAPP_BACKUP_GROUP_ID = safe_int(os.environ.get('MINIAPP_BACKUP_GROUP_ID')) # New Mini App Backup Group
+OTHERS_GROUP_ID = safe_int(os.environ.get('OTHERS_GROUP_ID', -123456789))
 MONGO_URI = os.environ.get('MONGO_URI')
 URL = os.environ.get('HEROKU_APP_URL')
 FORCE_CHANNEL_ID = os.environ.get('FORCE_CHANNEL_ID')  # e.g., "-100123456789"
@@ -760,7 +770,8 @@ def search_files_text(message):
         try:
             username_display = f"@{user.username}" if user.username else str(user.id)
             backup_text = (
-                f"[BACKUP] Message from User: {username_display} (ID: {user.id})\n"
+                f"💬 [BOT MESSAGE BACKUP]\n"
+                f"User: {username_display} (ID: {user.id})\n"
                 f"Message: {message.text}"
             )
             bot.send_message(BACKUP_GROUP_ID, backup_text)
@@ -928,9 +939,8 @@ def discussion_tutor_callback(call):
         bot.send_message(call.message.chat.id, err)
 
 def _build_backup_notification(source, full_name, username_display, user_id, file_name):
-    label = "Mini App Download" if source == "miniapp" else "Bot Download"
     return (
-        f"📥 *{label}*\n"
+        f"📥 *Bot Download Backup*\n"
         f"User: {full_name}\n"
         f"Username: {username_display}\n"
         f"ID: `{user_id}`\n"
@@ -1982,7 +1992,6 @@ def api_tutors():
     if not tag:
         return jsonify({"files": [], "error": "Invalid tag"})
     try:
-        # Matches 'tag' explicitly avoiding substring issues
         regex_pattern = r'\b' + re.escape(normalize_query(tag)) + r'\b'
         results = list(files_col.find(
             {"file_name": {"$regex": regex_pattern, "$options": "i"}}
@@ -2107,10 +2116,12 @@ def api_verify_sub():
 
 @app.route('/api/download', methods=['POST'])
 def api_download():
-    # Capture user IP address from headers
-    user_ip = request.headers.get('X-Forwarded-For', request.remote_addr)
+    # Advanced IP extraction for cloud providers (Heroku, Koyeb, etc.)
+    user_ip = request.headers.getlist("X-Forwarded-For")
     if user_ip:
-        user_ip = user_ip.split(',')[0].strip()
+        user_ip = user_ip[0].split(',')[0].strip()
+    else:
+        user_ip = request.remote_addr
 
     data = request.get_json(silent=True) or {}
     file_id = data.get('file_id', '').strip()
@@ -2146,14 +2157,37 @@ def api_download():
             "device_info": device_info
         })
         
-        if BACKUP_GROUP_ID:
+        # New Detailed Backup forwarding to MINIAPP_BACKUP_GROUP_ID
+        if MINIAPP_BACKUP_GROUP_ID:
+            try:
+                full_name = ' '.join(filter(None, [first_name, last_name])) or str(uid)
+                username_display = f"@{username}" if username else "No username"
+                platform = device_info.get("platform", "Unknown") if isinstance(device_info, dict) else "Unknown"
+                user_agent = device_info.get("userAgent", "Unknown") if isinstance(device_info, dict) else "Unknown"
+                
+                miniapp_backup_text = (
+                    f"🌐 *MiniApp Download Alert*\n\n"
+                    f"👤 *User:* {full_name}\n"
+                    f"📛 *Username:* {username_display}\n"
+                    f"🆔 *ID:* `{uid}`\n"
+                    f"📄 *File:* `{file_name}`\n"
+                    f"🌍 *IP:* `{user_ip}`\n"
+                    f"📱 *Platform:* `{platform}`\n"
+                    f"🔍 *Browser:* `{user_agent}`"
+                )
+                bot.send_message(MINIAPP_BACKUP_GROUP_ID, miniapp_backup_text, parse_mode="Markdown")
+            except Exception as e:
+                logging.error(f"Failed to send miniapp backup msg: {e}")
+        # Normal bot group backup fallback
+        elif BACKUP_GROUP_ID:
             try:
                 full_name = ' '.join(filter(None, [first_name, last_name])) or str(uid)
                 username_display = f"@{username}" if username else "No username"
                 backup_text = _build_backup_notification("miniapp", full_name, username_display, uid, file_name)
                 bot.send_message(BACKUP_GROUP_ID, backup_text, parse_mode="Markdown")
             except Exception as e:
-                logging.error(f"Failed to send backup msg: {e}")
+                logging.error(f"Failed to send normal backup msg: {e}")
+                
         return jsonify({"ok": True})
     except Exception as e:
         logging.error("API download error: %s", e)

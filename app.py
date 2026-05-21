@@ -409,7 +409,8 @@ def remove_tutor_button(message):
         bot.reply_to(message, "⚠️ Failed to remove tutor button. Please try again.")
 
 def _forward_user_submission(message, file_name=None):
-    if not OTHERS_GROUP_ID:
+    if not OTHERS_GROUP_ID or str(OTHERS_GROUP_ID).strip() == "" or str(OTHERS_GROUP_ID) == "0":
+        logging.error("OTHERS_GROUP_ID is not set or invalid.")
         return
     user = message.from_user
     first = user.first_name or ""
@@ -422,6 +423,7 @@ def _forward_user_submission(message, file_name=None):
         f"{fn_line}"
         f"\n*(Reply to this message to answer the user)*"
     )
+    # (Rest of your function remains unchanged)
     try:
         bot.forward_message(OTHERS_GROUP_ID, message.chat.id, message.message_id)
         bot.send_message(OTHERS_GROUP_ID, info_text)

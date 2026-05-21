@@ -29,6 +29,7 @@ ADMIN_CHANNEL_ID = os.environ.get('ADMIN_CHANNEL_ID')
 DISCUSSION_AP_MSG_ID = os.environ.get('DISCUSSION_AP_MSG_ID', '')
 DISCUSSION_AD_MSG_ID = os.environ.get('DISCUSSION_AD_MSG_ID', '')
 DISCUSSION_SD_MSG_ID = os.environ.get('DISCUSSION_SD_MSG_ID', '')
+MINIAPP_BACKUP_GROUP_ID = int(os.environ.get('MINIAPP_BACKUP_GROUP_ID', 0))
 
 # Setup Caption Variable (Updated with symbols and bold text)
 DEFAULT_CAPTION = (

@@ -13,22 +13,13 @@ from html import escape
 from urllib.parse import urlparse
 from urllib.request import urlopen
 
-# Safely parse integer environment variables to prevent crashes
-def safe_int(val, default=0):
-    try:
-        if not val:
-            return default
-        return int(str(val).strip())
-    except (TypeError, ValueError):
-        return default
-
 # Environment Variables (Set these in Heroku Settings -> Config Vars)
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
-ADMIN_ID = safe_int(os.environ.get('ADMIN_ID'))
-ADMIN_GROUP_ID = safe_int(os.environ.get('ADMIN_GROUP_ID'))
-BACKUP_GROUP_ID = safe_int(os.environ.get('BACKUP_GROUP_ID'))
-MINIAPP_BACKUP_GROUP_ID = safe_int(os.environ.get('MINIAPP_BACKUP_GROUP_ID')) # New Mini App Backup Group
-OTHERS_GROUP_ID = safe_int(os.environ.get('OTHERS_GROUP_ID', -123456789))
+ADMIN_ID = int(os.environ.get('ADMIN_ID', 0))
+ADMIN_GROUP_ID = int(os.environ.get('ADMIN_GROUP_ID', 0))
+BACKUP_GROUP_ID = int(os.environ.get('BACKUP_GROUP_ID', 0))
+MINIAPP_BACKUP_GROUP_ID = int(os.environ.get('MINIAPP_BACKUP_GROUP_ID', 0)) # Aluth MiniApp Backup Group Eka
+OTHERS_GROUP_ID = int(os.environ.get('OTHERS_GROUP_ID', -123456789))
 MONGO_URI = os.environ.get('MONGO_URI')
 URL = os.environ.get('HEROKU_APP_URL')
 FORCE_CHANNEL_ID = os.environ.get('FORCE_CHANNEL_ID')  # e.g., "-100123456789"
@@ -47,7 +38,7 @@ DEFAULT_CAPTION = (
     "━━━━━━━━━━━━━━‌‌\n\n"
     "<b>➠ Find papers, notes & discussions instantly!</b>\n"
     "<b>➠ Bot: @FinalPapers_bot</b>\n"
-    "<b>➠ Updates: @Learn_X_Edu</b>\n"
+    "<b>➠ Updates: @hLearn_X_Edu</b>\n"
     "━━━━━━━━━━━━━━‌‌"
 )
 
@@ -766,6 +757,7 @@ def search_files_text(message):
         "message": message.text,
         "timestamp": datetime.now(timezone.utc)
     })
+    
     if BACKUP_GROUP_ID:
         try:
             username_display = f"@{user.username}" if user.username else str(user.id)
@@ -2116,7 +2108,7 @@ def api_verify_sub():
 
 @app.route('/api/download', methods=['POST'])
 def api_download():
-    # Advanced IP extraction for cloud providers (Heroku, Koyeb, etc.)
+    # Capture user IP address from headers
     user_ip = request.headers.getlist("X-Forwarded-For")
     if user_ip:
         user_ip = user_ip[0].split(',')[0].strip()
@@ -2157,7 +2149,6 @@ def api_download():
             "device_info": device_info
         })
         
-        # New Detailed Backup forwarding to MINIAPP_BACKUP_GROUP_ID
         if MINIAPP_BACKUP_GROUP_ID:
             try:
                 full_name = ' '.join(filter(None, [first_name, last_name])) or str(uid)
@@ -2178,7 +2169,6 @@ def api_download():
                 bot.send_message(MINIAPP_BACKUP_GROUP_ID, miniapp_backup_text, parse_mode="Markdown")
             except Exception as e:
                 logging.error(f"Failed to send miniapp backup msg: {e}")
-        # Normal bot group backup fallback
         elif BACKUP_GROUP_ID:
             try:
                 full_name = ' '.join(filter(None, [first_name, last_name])) or str(uid)
@@ -2186,7 +2176,7 @@ def api_download():
                 backup_text = _build_backup_notification("miniapp", full_name, username_display, uid, file_name)
                 bot.send_message(BACKUP_GROUP_ID, backup_text, parse_mode="Markdown")
             except Exception as e:
-                logging.error(f"Failed to send normal backup msg: {e}")
+                logging.error(f"Failed to send backup msg: {e}")
                 
         return jsonify({"ok": True})
     except Exception as e:

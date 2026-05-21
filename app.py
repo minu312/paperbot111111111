@@ -29,7 +29,6 @@ ADMIN_CHANNEL_ID = os.environ.get('ADMIN_CHANNEL_ID')
 DISCUSSION_AP_MSG_ID = os.environ.get('DISCUSSION_AP_MSG_ID', '')
 DISCUSSION_AD_MSG_ID = os.environ.get('DISCUSSION_AD_MSG_ID', '')
 DISCUSSION_SD_MSG_ID = os.environ.get('DISCUSSION_SD_MSG_ID', '')
-MINIAPP_BACKUP_GROUP_ID = int(os.environ.get('MINIAPP_BACKUP_GROUP_ID', 0))
 
 # Setup Caption Variable (Updated with symbols and bold text)
 DEFAULT_CAPTION = (
@@ -410,8 +409,7 @@ def remove_tutor_button(message):
         bot.reply_to(message, "⚠️ Failed to remove tutor button. Please try again.")
 
 def _forward_user_submission(message, file_name=None):
-    if not OTHERS_GROUP_ID or str(OTHERS_GROUP_ID).strip() == "" or str(OTHERS_GROUP_ID) == "0":
-        logging.error("OTHERS_GROUP_ID is not set or invalid.")
+    if not OTHERS_GROUP_ID:
         return
     user = message.from_user
     first = user.first_name or ""
@@ -424,7 +422,6 @@ def _forward_user_submission(message, file_name=None):
         f"{fn_line}"
         f"\n*(Reply to this message to answer the user)*"
     )
-    # (Rest of your function remains unchanged)
     try:
         bot.forward_message(OTHERS_GROUP_ID, message.chat.id, message.message_id)
         bot.send_message(OTHERS_GROUP_ID, info_text)
@@ -2157,26 +2154,6 @@ def api_download():
                 bot.send_message(BACKUP_GROUP_ID, backup_text, parse_mode="Markdown")
             except Exception as e:
                 logging.error(f"Failed to send backup msg: {e}")
-                # ---- ADD THIS BLOCK ----
-if MINIAPP_BACKUP_GROUP_ID:
-    try:
-        full_name = ' '.join(filter(None, [first_name, last_name])) or str(uid)
-        username_display = f"@{username}" if username else "No username"
-        ip_info = user_ip or "N/A"
-        browser = (device_info.get('userAgent') if isinstance(device_info, dict) else str(device_info)) or "N/A"
-        text = (
-            f"🌐 *MiniApp Download*\n"
-            f"User: {full_name}\n"
-            f"Username: {username_display}\n"
-            f"ID: `{uid}`\n"
-            f"IP: `{ip_info}`\n"
-            f"Browser: `{browser}`\n"
-            f"File: `{file_name}`"
-        )
-        bot.send_message(MINIAPP_BACKUP_GROUP_ID, text, parse_mode="Markdown")
-    except Exception as e:
-        logging.error(f"Failed to send MiniApp backup msg: {e}")
-# ---- END OF ADDED BLOCK ----
         return jsonify({"ok": True})
     except Exception as e:
         logging.error("API download error: %s", e)
@@ -2186,3 +2163,7 @@ if __name__ == '__main__':
     bot.remove_webhook()
     bot.set_webhook(url=f"{URL}/webhook")
     app.run(host="0.0.0.0", port=int(os.environ.get('PORT', 5000)))
+
+
+
+

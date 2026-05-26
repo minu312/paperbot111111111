@@ -29,6 +29,7 @@ ADMIN_CHANNEL_ID = os.environ.get('ADMIN_CHANNEL_ID')
 DISCUSSION_AP_MSG_ID = os.environ.get('DISCUSSION_AP_MSG_ID', '')
 DISCUSSION_AD_MSG_ID = os.environ.get('DISCUSSION_AD_MSG_ID', '')
 DISCUSSION_SD_MSG_ID = os.environ.get('DISCUSSION_SD_MSG_ID', '')
+DISCUSSION_NJ_MSG_ID = os.environ.get('DISCUSSION_NJ_MSG_ID', '')
 
 # Setup Caption Variable (Updated with symbols and bold text)
 DEFAULT_CAPTION = (
@@ -57,11 +58,15 @@ tutor_buttons_col = db['tutor_buttons']
 broadcast_logs_col = db['broadcast_logs']
 banned_users_col = db['banned_users']
 
-DEFAULT_TUTOR_BUTTONS = [
-    {"name": "Anuradha Perera", "search_tag": "ap", "image_url": "/static/ap.jpg"},
-    {"name": "Amila Dasanayaka", "search_tag": "ad", "image_url": "/static/ad.jpg"},
-    {"name": "Sashanka Danujaya", "search_tag": "sd", "image_url": "/static/sd.jpg"},
-]
+DEFAULT_TUTOR_BUTTONS = []
+
+SUBJECT_ALIASES = {
+    "physics": "physics",
+    "chemistry": "chemistry",
+    "biology": "biology",
+    "combined maths": "combined_maths",
+    "combined_maths": "combined_maths",
+}
 
 # Number of results to show per page in bot search results
 PAGE_SIZE = 8
@@ -95,10 +100,28 @@ def tutor_search_tag_from_name(name):
 def tutor_key(name):
     return re.sub(r'\s+', ' ', name.strip().lower())
 
-def get_tutor_buttons():
+def normalize_subject(subject):
+    return SUBJECT_ALIASES.get(re.sub(r'\s+', ' ', str(subject or '').strip().lower()), "")
+
+def parse_subject_prefixed_tutor_name(raw):
+    cleaned = re.sub(r'\s+', ' ', str(raw or '').strip())
+    if not cleaned:
+        return "", ""
+    lower = cleaned.lower()
+    for alias in ("combined maths", "combined_maths", "physics", "chemistry", "biology"):
+        prefix = alias + " "
+        if lower.startswith(prefix):
+            return normalize_subject(alias), cleaned[len(prefix):].strip()
+    return "", cleaned
+
+def get_tutor_buttons(subject=""):
     tutors = []
+    normalized_subject = normalize_subject(subject)
+    mongo_query = {}
+    if normalized_subject:
+        mongo_query["subject"] = normalized_subject
     try:
-        for t in tutor_buttons_col.find({}, {"_id": 1, "name": 1, "search_tag": 1, "image_file_id": 1, "image_url": 1}).sort("name", 1):
+        for t in tutor_buttons_col.find(mongo_query, {"_id": 1, "name": 1, "search_tag": 1, "image_file_id": 1, "image_url": 1, "subject": 1}).sort("name", 1):
             image_url = t.get("image_url") or ""
             if not image_url and t.get("image_file_id"):
                 image_url = f"/api/tutor-image/{str(t['_id'])}"
@@ -106,7 +129,8 @@ def get_tutor_buttons():
                 "id": str(t["_id"]),
                 "name": t.get("name", ""),
                 "search_tag": t.get("search_tag", ""),
-                "image_url": image_url
+                "image_url": image_url,
+                "subject": normalize_subject(t.get("subject"))
             })
     except Exception as e:
         logging.error("Failed to load tutor buttons: %s", e)
@@ -132,6 +156,7 @@ def send_discussion_messages(target_chat_id, tutor):
         "ap": DISCUSSION_AP_MSG_ID,
         "ad": DISCUSSION_AD_MSG_ID,
         "sd": DISCUSSION_SD_MSG_ID,
+        "nj": DISCUSSION_NJ_MSG_ID,
     }
     raw_refs = refs_by_tutor.get(str(tutor).lower(), "")
     tokens = [t for t in re.split(r'[\s,]+', raw_refs.strip()) if t]
@@ -159,11 +184,12 @@ def send_discussion_messages(target_chat_id, tutor):
 
 def send_discussion_tutor_buttons(chat_id, reply_to_message_id=None):
     markup = InlineKeyboardMarkup()
-    markup.row_width = 3
+    markup.row_width = 4
     markup.add(
         InlineKeyboardButton("AP", callback_data="discussion_tutor:ap"),
         InlineKeyboardButton("AD", callback_data="discussion_tutor:ad"),
         InlineKeyboardButton("SD", callback_data="discussion_tutor:sd"),
+        InlineKeyboardButton("NJ", callback_data="discussion_tutor:nj"),
     )
     bot.send_message(chat_id, "Please choose a tutor:", reply_markup=markup, reply_to_message_id=reply_to_message_id)
 
@@ -354,10 +380,10 @@ def add_tutor_button(message):
     command_text = (message.text or message.caption or '').strip()
     parts = command_text.split(None, 1)
     if len(parts) < 2 or not parts[1].strip():
-        bot.reply_to(message, "Usage: /addbutton <Tutor Name> (attach a photo optionally)")
+        bot.reply_to(message, "Usage: /addbutton [physics|chemistry|biology|combined maths] <Tutor Name> (attach a photo optionally)")
         return
 
-    tutor_name = parts[1].strip()
+    subject, tutor_name = parse_subject_prefixed_tutor_name(parts[1])
     search_tag = tutor_search_tag_from_name(tutor_name)
     if not search_tag:
         bot.reply_to(message, "⚠️ Invalid tutor name.")
@@ -372,6 +398,8 @@ def add_tutor_button(message):
         "name_key": tutor_key(tutor_name),
         "search_tag": search_tag
     }
+    if subject:
+        update["subject"] = subject
     if image_file_id:
         update["image_file_id"] = image_file_id
         update["image_url"] = ""
@@ -382,7 +410,10 @@ def add_tutor_button(message):
             {"$set": update, "$setOnInsert": {"created_at": datetime.now(timezone.utc)}},
             upsert=True
         )
-        bot.reply_to(message, f"✅ Tutor button saved: {tutor_name}")
+        if subject:
+            bot.reply_to(message, f"✅ Tutor button saved: {tutor_name} ({subject.replace('_', ' ')})")
+        else:
+            bot.reply_to(message, f"✅ Tutor button saved: {tutor_name}")
     except Exception as e:
         logging.error("Failed to save tutor button '%s': %s", tutor_name, e)
         bot.reply_to(message, "⚠️ Failed to save tutor button. Please try again.")
@@ -822,7 +853,7 @@ def search_files_text(message):
         return
 
     if re.search(r'\bdiscussions?\b', lower_text):
-        tutor_match = re.search(r'\b(ap|ad|sd)\b', lower_text)
+        tutor_match = re.search(r'\b(ap|ad|sd|nj)\b', lower_text)
         if tutor_match:
             ok, err = send_discussion_messages(message.chat.id, tutor_match.group(1))
             if not ok:
@@ -917,7 +948,7 @@ def verify_subscription_callback(call):
 @bot.callback_query_handler(func=lambda call: call.data.startswith('discussion_tutor:'))
 def discussion_tutor_callback(call):
     tutor = call.data.split(':', 1)[1] if ':' in call.data else ""
-    if tutor not in ("ap", "ad", "sd"):
+    if tutor not in ("ap", "ad", "sd", "nj"):
         bot.answer_callback_query(call.id, "Invalid tutor", show_alert=True)
         return
     ok, err = send_discussion_messages(call.message.chat.id, tutor)
@@ -1313,6 +1344,38 @@ MINIAPP_HTML = """
             padding: 14px;
             margin-bottom: 12px;
         }
+        .subject-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        .subject-card {
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            padding: 12px;
+            text-align: left;
+            background: rgba(255, 255, 255, 0.36);
+            color: var(--text);
+            cursor: pointer;
+            font-weight: 700;
+            box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
+            transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
+        }
+        .subject-card small {
+            display: block;
+            font-weight: 500;
+            color: var(--muted);
+            margin-top: 4px;
+        }
+        .subject-card.active,
+        .subject-card:hover {
+            border-color: var(--accent);
+            box-shadow: 0 12px 24px rgba(37, 99, 235, 0.2);
+        }
+        .subject-card:active {
+            transform: translateY(1px);
+        }
         .tutors-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
@@ -1538,6 +1601,11 @@ MINIAPP_HTML = """
             color: var(--muted);
             margin-bottom: 10px;
         }
+        .discussion-mini-btn {
+            width: 100%;
+            margin-bottom: 10px;
+            padding: 8px 10px;
+        }
         .discussion-grid .search-btn {
             width: 100%;
             padding: 9px 10px;
@@ -1566,17 +1634,10 @@ MINIAPP_HTML = """
         </div>
 
         <div class="content-card surface">
-            <div class="section-title">Browse by Tutor</div>
+            <div class="section-title">Subjects</div>
+            <div class="subject-grid" id="subjectsGrid"></div>
+            <div class="section-title" id="tutorSectionTitle" style="display:none;">Tutors</div>
             <div class="tutors-grid" id="tutorsGrid"></div>
-        </div>
-
-        <div class="content-card surface">
-            <div class="section-title">Discussions</div>
-            <div class="tutors-grid discussion-grid">
-                <button class="search-btn" type="button" onclick="sendDiscussion('ap')">AP</button>
-                <button class="search-btn" type="button" onclick="sendDiscussion('ad')">AD</button>
-                <button class="search-btn" type="button" onclick="sendDiscussion('sd')">SD</button>
-            </div>
         </div>
 
         <div class="content-card surface">
@@ -1659,8 +1720,18 @@ MINIAPP_HTML = """
             }
         })();
 
+        const SUBJECTS = [
+            { key: 'physics', label: 'Physics', hint: 'Browse physics tutors' },
+            { key: 'chemistry', label: 'Chemistry', hint: 'Browse chemistry tutors' },
+            { key: 'biology', label: 'Biology', hint: 'Browse biology tutors' },
+            { key: 'combined_maths', label: 'Combined Maths', hint: 'Browse combined maths tutors' }
+        ];
+        let currentSubject = null;
         let currentTag = null;
         let currentTutorLabel = null;
+        let folderAllFiles = [];
+        let folderTutorTag = '';
+        let folderTutorLabel = '';
         var isAdmin = false;
 
         function showToast(msg, dur) {
@@ -1695,50 +1766,61 @@ MINIAPP_HTML = """
             }).join('');
         }
 
-        var apAllFiles = [];
-
-        function renderApResults(files) {
-            apAllFiles = files || [];
-            document.getElementById('resultsTitle').textContent = 'Results';
-            renderApRoot();
+        function canShowDiscussion(tag) {
+            return ['ap', 'ad', 'sd', 'nj'].indexOf((tag || '').toLowerCase()) !== -1;
         }
 
-        function renderApRoot() {
+        function renderTutorFolderResults(files, tag, tutorLabel) {
+            folderAllFiles = files || [];
+            folderTutorTag = (tag || '').toLowerCase();
+            folderTutorLabel = tutorLabel || tag || 'Tutor';
+            document.getElementById('resultsTitle').textContent = folderTutorLabel + ' Papers';
+            renderTutorFolderRoot();
+        }
+
+        function renderTutorFolderRoot() {
             const container = document.getElementById('resultsContainer');
             const title = document.getElementById('resultsTitle');
+            var prefix = folderTutorTag + ' ';
 
-            var markingFiles = apAllFiles.filter(function(f) {
+            var markingFiles = folderAllFiles.filter(function(f) {
                 var n = f.file_name.toLowerCase();
                 return n.indexOf('marking') !== -1;
             });
-            var finalFiles = apAllFiles.filter(function(f) { 
+            var finalFiles = folderAllFiles.filter(function(f) {
                 var n = f.file_name.toLowerCase();
-                return n.indexOf('ap final') !== -1 && n.indexOf('marking') === -1; 
+                return n.indexOf(prefix + 'final') !== -1 && n.indexOf('marking') === -1;
             });
-            var mainFiles  = apAllFiles.filter(function(f) { 
+            var mainFiles = folderAllFiles.filter(function(f) {
                 var n = f.file_name.toLowerCase();
-                return n.indexOf('ap main') !== -1 && n.indexOf('marking') === -1; 
+                return n.indexOf(prefix + 'main') !== -1 && n.indexOf('marking') === -1;
             });
-            var fullFiles  = apAllFiles.filter(function(f) { 
+            var fullFiles = folderAllFiles.filter(function(f) {
                 var n = f.file_name.toLowerCase();
-                return n.indexOf('ap full') !== -1 && n.indexOf('marking') === -1; 
+                return n.indexOf(prefix + 'full') !== -1 && n.indexOf('marking') === -1;
             });
-            var otherFiles = apAllFiles.filter(function(f) {
+            var otherFiles = folderAllFiles.filter(function(f) {
                 var n = f.file_name.toLowerCase();
-                return n.indexOf('ap final') === -1 && n.indexOf('ap main') === -1 && n.indexOf('ap full') === -1 && n.indexOf('marking') === -1;
+                return n.indexOf(prefix + 'final') === -1 &&
+                       n.indexOf(prefix + 'main') === -1 &&
+                       n.indexOf(prefix + 'full') === -1 &&
+                       n.indexOf('marking') === -1;
             });
 
-            if (!apAllFiles.length) {
+            if (!folderAllFiles.length) {
                 title.style.display = 'none';
-                container.innerHTML = '<div class="empty-state"><i class="bi bi-inbox"></i><p>No papers found for Anuradha Perera.</p></div>';
+                container.innerHTML = '<div class="empty-state"><i class="bi bi-inbox"></i><p>No papers found for ' + escapeHtml(folderTutorLabel) + '.</p></div>';
                 return;
             }
             title.style.display = 'block';
 
             var html = '';
+            if (canShowDiscussion(folderTutorTag)) {
+                html += '<button class="search-btn discussion-mini-btn" type="button" onclick="sendDiscussion(' + JSON.stringify(folderTutorTag) + ')"><i class="bi bi-chat-dots me-1"></i> Discussion</button>';
+            }
 
             if (markingFiles.length) {
-                html += '<div class="ap-folder-btn" onclick="openApFolder(\\'marking\\')">'
+                html += '<div class="ap-folder-btn" onclick="openTutorFolder(\\'marking\\')">'
                       + '<i class="bi bi-folder-fill text-warning me-2"></i>'
                       + '<span>markings</span>'
                       + '<span class="ap-folder-count">' + markingFiles.length + '</span>'
@@ -1746,7 +1828,7 @@ MINIAPP_HTML = """
                       + '</div>';
             }
             if (finalFiles.length) {
-                html += '<div class="ap-folder-btn" onclick="openApFolder(\\'final\\')">'
+                html += '<div class="ap-folder-btn" onclick="openTutorFolder(\\'final\\')">'
                       + '<i class="bi bi-folder-fill text-warning me-2"></i>'
                       + '<span>final papers</span>'
                       + '<span class="ap-folder-count">' + finalFiles.length + '</span>'
@@ -1754,7 +1836,7 @@ MINIAPP_HTML = """
                       + '</div>';
             }
             if (mainFiles.length) {
-                html += '<div class="ap-folder-btn" onclick="openApFolder(\\'main\\')">'
+                html += '<div class="ap-folder-btn" onclick="openTutorFolder(\\'main\\')">'
                       + '<i class="bi bi-folder-fill text-warning me-2"></i>'
                       + '<span>main papers</span>'
                       + '<span class="ap-folder-count">' + mainFiles.length + '</span>'
@@ -1762,7 +1844,7 @@ MINIAPP_HTML = """
                       + '</div>';
             }
             if (fullFiles.length) {
-                html += '<div class="ap-folder-btn" onclick="openApFolder(\\'full\\')">'
+                html += '<div class="ap-folder-btn" onclick="openTutorFolder(\\'full\\')">'
                       + '<i class="bi bi-folder-fill text-warning me-2"></i>'
                       + '<span>full papers</span>'
                       + '<span class="ap-folder-count">' + fullFiles.length + '</span>'
@@ -1784,17 +1866,17 @@ MINIAPP_HTML = """
             container.innerHTML = html;
         }
 
-        function openApFolder(folderType) {
+        function openTutorFolder(folderType) {
             var folderFiles = [];
             var folderLabel = folderType === 'marking' ? 'markings' : (folderType + ' papers');
 
             if (folderType === 'marking') {
-                folderFiles = apAllFiles.filter(function(f) {
+                folderFiles = folderAllFiles.filter(function(f) {
                     return f.file_name.toLowerCase().indexOf('marking') !== -1;
                 });
             } else {
-                var keyword = 'ap ' + folderType;
-                folderFiles = apAllFiles.filter(function(f) {
+                var keyword = folderTutorTag + ' ' + folderType;
+                folderFiles = folderAllFiles.filter(function(f) {
                     var n = f.file_name.toLowerCase();
                     return n.indexOf(keyword) !== -1 && n.indexOf('marking') === -1;
                 });
@@ -1803,7 +1885,11 @@ MINIAPP_HTML = """
             document.getElementById('resultsTitle').textContent = '📁 ' + folderLabel;
             var container = document.getElementById('resultsContainer');
 
-            var html = '<div class="ap-folder-btn ap-back-btn" onclick="backToApRoot()">'
+            var html = '';
+            if (canShowDiscussion(folderTutorTag)) {
+                html += '<button class="search-btn discussion-mini-btn" type="button" onclick="sendDiscussion(' + JSON.stringify(folderTutorTag) + ')"><i class="bi bi-chat-dots me-1"></i> Discussion</button>';
+            }
+            html += '<div class="ap-folder-btn ap-back-btn" onclick="backToTutorRoot()">'
                      + '<i class="bi bi-arrow-left-circle-fill text-secondary me-2"></i>'
                      + '<span>← Back</span>'
                      + '</div>';
@@ -1825,9 +1911,9 @@ MINIAPP_HTML = """
             container.innerHTML = html;
         }
 
-        function backToApRoot() {
-            document.getElementById('resultsTitle').textContent = 'Results';
-            renderApRoot();
+        function backToTutorRoot() {
+            document.getElementById('resultsTitle').textContent = folderTutorLabel + ' Papers';
+            renderTutorFolderRoot();
         }
 
         function escapeHtml(str) {
@@ -1847,14 +1933,44 @@ MINIAPP_HTML = """
             return 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" fill="%234f86c6"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="white" font-size="60">' + txt + '</text></svg>';
         }
 
-        function loadTutorButtons() {
-            fetch('/api/tutor-buttons')
+        function renderSubjectCards() {
+            const grid = document.getElementById('subjectsGrid');
+            grid.innerHTML = SUBJECTS.map(function(s, idx) {
+                const id = 'subject-btn-' + idx;
+                return "<button class='subject-card' id='" + id + "' onclick='selectSubject(" + JSON.stringify(s.key) + ", " + JSON.stringify(id) + ")'>"
+                    + '<span>' + escapeHtml(s.label) + '</span>'
+                    + '<small>' + escapeHtml(s.hint) + '</small>'
+                    + '</button>';
+            }).join('');
+        }
+
+        function selectSubject(subject, btnId) {
+            currentSubject = subject;
+            document.querySelectorAll('.subject-card').forEach(function(b) { b.classList.remove('active'); });
+            const active = document.getElementById(btnId);
+            if (active) active.classList.add('active');
+            document.getElementById('tutorSectionTitle').style.display = 'block';
+            loadTutorButtons(subject);
+        }
+
+        function loadTutorButtons(subject) {
+            var url = '/api/tutor-buttons';
+            if (subject) {
+                url += '?subject=' + encodeURIComponent(subject);
+            }
+            fetch(url)
                 .then(function(r) { return r.json(); })
                 .then(function(data) {
                     const grid = document.getElementById('tutorsGrid');
                     const tutors = (data && data.tutors) ? data.tutors : [];
                     if (!tutors.length) {
-                        grid.innerHTML = '<div class="empty-state"><p>No tutors added yet.</p></div>';
+                        if (subject) {
+                            var friendly = SUBJECTS.filter(function(s) { return s.key === subject; })[0];
+                            var label = friendly ? friendly.label : subject;
+                            grid.innerHTML = '<div class="empty-state"><p>No tutors found for ' + escapeHtml(label) + '.</p></div>';
+                        } else {
+                            grid.innerHTML = '<div class="empty-state"><p>Select a subject to view tutors.</p></div>';
+                        }
                         return;
                     }
                     grid.innerHTML = tutors.map(function(t, idx) {
@@ -1880,6 +1996,9 @@ MINIAPP_HTML = """
             document.querySelectorAll('.tutor-btn').forEach(function(b) { b.classList.remove('active'); });
             currentTag = null;
             currentTutorLabel = null;
+            folderTutorTag = '';
+            folderTutorLabel = '';
+            folderAllFiles = [];
             setLoading(true);
             fetch('/api/search?q=' + encodeURIComponent(q))
                 .then(function(r) { return r.json(); })
@@ -1913,11 +2032,7 @@ MINIAPP_HTML = """
                 .then(function(r) { return r.json(); })
                 .then(function(data) {
                     setLoading(false);
-                    if (tag === 'ap') {
-                        renderApResults(data.files);
-                    } else {
-                        renderResults(data.files, 'No papers found for ' + (currentTutorLabel || tag) + '.');
-                    }
+                    renderTutorFolderResults(data.files, tag, currentTutorLabel || tag);
                 })
                 .catch(function() { setLoading(false); showToast('Failed to load papers. Please try again.'); });
         }
@@ -2018,6 +2133,7 @@ MINIAPP_HTML = """
             if (e.key === 'Enter') doSearch();
         });
         
+        renderSubjectCards();
         loadTutorButtons();
         checkAdminMode();
 
@@ -2108,7 +2224,8 @@ def api_tutors():
 
 @app.route('/api/tutor-buttons')
 def api_tutor_buttons():
-    return jsonify({"tutors": get_tutor_buttons()})
+    subject = request.args.get('subject', '')
+    return jsonify({"tutors": get_tutor_buttons(subject=subject)})
 
 @app.route('/api/tutor-image/<tutor_id>')
 def api_tutor_image(tutor_id):
@@ -2129,7 +2246,7 @@ def api_discussions_send():
     data = request.get_json(silent=True) or {}
     tutor = str(data.get('tutor', '')).strip().lower()
     user_id = data.get('user_id')
-    if tutor not in ("ap", "ad", "sd") or not str(user_id).strip():
+    if tutor not in ("ap", "ad", "sd", "nj") or not str(user_id).strip():
         return jsonify({"ok": False, "error": "Invalid request"}), 400
     try:
         status = get_subscription_status(int(user_id))
@@ -2276,6 +2393,3 @@ if __name__ == '__main__':
     bot.remove_webhook()
     bot.set_webhook(url=f"{URL}/webhook")
     app.run(host="0.0.0.0", port=int(os.environ.get('PORT', 5000)))
-
-
-

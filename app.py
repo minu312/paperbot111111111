@@ -1209,8 +1209,7 @@ MINIAPP_HTML = """
             }
         }
         body {
-            background: radial-gradient(1200px 620px at -10% -20%, rgba(59, 130, 246, 0.24), transparent 55%),
-                        radial-gradient(980px 560px at 120% -10%, rgba(125, 211, 252, 0.25), transparent 58%),
+            background: radial-gradient(1200px 620px at -10% -20%, rgba(59, 130, 246, 0.22), transparent 56%),
                         linear-gradient(155deg, var(--bg-grad-1), var(--bg-grad-2));
             font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
             color: var(--text);
@@ -1227,8 +1226,8 @@ MINIAPP_HTML = """
             border: 1px solid var(--glass-border);
             box-shadow: var(--card-shadow);
             border-radius: 20px;
-            backdrop-filter: blur(14px);
-            -webkit-backdrop-filter: blur(14px);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
         }
         .topbar {
             display: flex;
@@ -1255,7 +1254,7 @@ MINIAPP_HTML = """
             background: linear-gradient(130deg, var(--accent), var(--accent-strong));
             border-radius: 999px;
             padding: 6px 10px;
-            font-size: 0.69rem;
+            font-size: 0.7rem;
             font-weight: 700;
             color: #fff;
             letter-spacing: 0.03em;
@@ -2276,6 +2275,5 @@ if __name__ == '__main__':
     bot.remove_webhook()
     bot.set_webhook(url=f"{URL}/webhook")
     app.run(host="0.0.0.0", port=int(os.environ.get('PORT', 5000)))
-
 
 

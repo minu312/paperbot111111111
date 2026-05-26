@@ -30,6 +30,7 @@ DISCUSSION_AP_MSG_ID = os.environ.get('DISCUSSION_AP_MSG_ID', '')
 DISCUSSION_AD_MSG_ID = os.environ.get('DISCUSSION_AD_MSG_ID', '')
 DISCUSSION_SD_MSG_ID = os.environ.get('DISCUSSION_SD_MSG_ID', '')
 DISCUSSION_NJ_MSG_ID = os.environ.get('DISCUSSION_NJ_MSG_ID', '')
+DISCUSSION_TUTORS = ("ap", "ad", "sd", "nj")
 
 # Setup Caption Variable (Updated with symbols and bold text)
 DEFAULT_CAPTION = (
@@ -58,15 +59,14 @@ tutor_buttons_col = db['tutor_buttons']
 broadcast_logs_col = db['broadcast_logs']
 banned_users_col = db['banned_users']
 
-DEFAULT_TUTOR_BUTTONS = []
-
 SUBJECT_ALIASES = {
     "physics": "physics",
     "chemistry": "chemistry",
     "biology": "biology",
     "combined maths": "combined_maths",
-    "combined_maths": "combined_maths",
 }
+ADD_BUTTON_SUBJECT_USAGE = "|".join(SUBJECT_ALIASES.keys())
+DISCUSSION_TUTOR_REGEX = re.compile(r'\b(?:' + '|'.join(DISCUSSION_TUTORS) + r')\b')
 
 # Number of results to show per page in bot search results
 PAGE_SIZE = 8
@@ -101,14 +101,15 @@ def tutor_key(name):
     return re.sub(r'\s+', ' ', name.strip().lower())
 
 def normalize_subject(subject):
-    return SUBJECT_ALIASES.get(re.sub(r'\s+', ' ', str(subject or '').strip().lower()), "")
+    normalized = re.sub(r'[_\s]+', ' ', str(subject or '').strip().lower())
+    return SUBJECT_ALIASES.get(normalized, "")
 
 def parse_subject_prefixed_tutor_name(raw):
     cleaned = re.sub(r'\s+', ' ', str(raw or '').strip())
     if not cleaned:
         return "", ""
     lower = cleaned.lower()
-    for alias in ("combined maths", "combined_maths", "physics", "chemistry", "biology"):
+    for alias in sorted(SUBJECT_ALIASES.keys(), key=len, reverse=True):
         prefix = alias + " "
         if lower.startswith(prefix):
             return normalize_subject(alias), cleaned[len(prefix):].strip()
@@ -134,7 +135,7 @@ def get_tutor_buttons(subject=""):
             })
     except Exception as e:
         logging.error("Failed to load tutor buttons: %s", e)
-    return tutors or DEFAULT_TUTOR_BUTTONS
+    return tutors
 
 def _extract_msg_id_from_token(token):
     cleaned = token.strip()
@@ -185,12 +186,10 @@ def send_discussion_messages(target_chat_id, tutor):
 def send_discussion_tutor_buttons(chat_id, reply_to_message_id=None):
     markup = InlineKeyboardMarkup()
     markup.row_width = 4
-    markup.add(
-        InlineKeyboardButton("AP", callback_data="discussion_tutor:ap"),
-        InlineKeyboardButton("AD", callback_data="discussion_tutor:ad"),
-        InlineKeyboardButton("SD", callback_data="discussion_tutor:sd"),
-        InlineKeyboardButton("NJ", callback_data="discussion_tutor:nj"),
-    )
+    markup.add(*[
+        InlineKeyboardButton(t.upper(), callback_data=f"discussion_tutor:{t}")
+        for t in DISCUSSION_TUTORS
+    ])
     bot.send_message(chat_id, "Please choose a tutor:", reply_markup=markup, reply_to_message_id=reply_to_message_id)
 
 def get_subscription_status(user_id):
@@ -380,7 +379,7 @@ def add_tutor_button(message):
     command_text = (message.text or message.caption or '').strip()
     parts = command_text.split(None, 1)
     if len(parts) < 2 or not parts[1].strip():
-        bot.reply_to(message, "Usage: /addbutton [physics|chemistry|biology|combined maths] <Tutor Name> (attach a photo optionally)")
+        bot.reply_to(message, f"Usage: /addbutton [{ADD_BUTTON_SUBJECT_USAGE}] <Tutor Name> (attach a photo optionally)")
         return
 
     subject, tutor_name = parse_subject_prefixed_tutor_name(parts[1])
@@ -853,9 +852,9 @@ def search_files_text(message):
         return
 
     if re.search(r'\bdiscussions?\b', lower_text):
-        tutor_match = re.search(r'\b(ap|ad|sd|nj)\b', lower_text)
+        tutor_match = DISCUSSION_TUTOR_REGEX.search(lower_text)
         if tutor_match:
-            ok, err = send_discussion_messages(message.chat.id, tutor_match.group(1))
+            ok, err = send_discussion_messages(message.chat.id, tutor_match.group(0))
             if not ok:
                 bot.reply_to(message, err)
         else:
@@ -948,7 +947,7 @@ def verify_subscription_callback(call):
 @bot.callback_query_handler(func=lambda call: call.data.startswith('discussion_tutor:'))
 def discussion_tutor_callback(call):
     tutor = call.data.split(':', 1)[1] if ':' in call.data else ""
-    if tutor not in ("ap", "ad", "sd", "nj"):
+    if tutor not in DISCUSSION_TUTORS:
         bot.answer_callback_query(call.id, "Invalid tutor", show_alert=True)
         return
     ok, err = send_discussion_messages(call.message.chat.id, tutor)
@@ -1726,7 +1725,7 @@ MINIAPP_HTML = """
             { key: 'biology', label: 'Biology', hint: 'Browse biology tutors' },
             { key: 'combined_maths', label: 'Combined Maths', hint: 'Browse combined maths tutors' }
         ];
-        let currentSubject = null;
+        const DISCUSSION_TUTOR_TAGS = ['ap', 'ad', 'sd', 'nj'];
         let currentTag = null;
         let currentTutorLabel = null;
         let folderAllFiles = [];
@@ -1767,7 +1766,7 @@ MINIAPP_HTML = """
         }
 
         function canShowDiscussion(tag) {
-            return ['ap', 'ad', 'sd', 'nj'].indexOf((tag || '').toLowerCase()) !== -1;
+            return DISCUSSION_TUTOR_TAGS.indexOf((tag || '').toLowerCase()) !== -1;
         }
 
         function renderTutorFolderResults(files, tag, tutorLabel) {
@@ -1781,7 +1780,8 @@ MINIAPP_HTML = """
         function renderTutorFolderRoot() {
             const container = document.getElementById('resultsContainer');
             const title = document.getElementById('resultsTitle');
-            var prefix = folderTutorTag + ' ';
+            var spacedPrefix = folderTutorTag + ' ';
+            var directPrefix = folderTutorTag;
 
             var markingFiles = folderAllFiles.filter(function(f) {
                 var n = f.file_name.toLowerCase();
@@ -1789,21 +1789,24 @@ MINIAPP_HTML = """
             });
             var finalFiles = folderAllFiles.filter(function(f) {
                 var n = f.file_name.toLowerCase();
-                return n.indexOf(prefix + 'final') !== -1 && n.indexOf('marking') === -1;
+                return (n.indexOf(spacedPrefix + 'final') !== -1 || n.indexOf(directPrefix + 'final') !== -1) && n.indexOf('marking') === -1;
             });
             var mainFiles = folderAllFiles.filter(function(f) {
                 var n = f.file_name.toLowerCase();
-                return n.indexOf(prefix + 'main') !== -1 && n.indexOf('marking') === -1;
+                return (n.indexOf(spacedPrefix + 'main') !== -1 || n.indexOf(directPrefix + 'main') !== -1) && n.indexOf('marking') === -1;
             });
             var fullFiles = folderAllFiles.filter(function(f) {
                 var n = f.file_name.toLowerCase();
-                return n.indexOf(prefix + 'full') !== -1 && n.indexOf('marking') === -1;
+                return (n.indexOf(spacedPrefix + 'full') !== -1 || n.indexOf(directPrefix + 'full') !== -1) && n.indexOf('marking') === -1;
             });
             var otherFiles = folderAllFiles.filter(function(f) {
                 var n = f.file_name.toLowerCase();
-                return n.indexOf(prefix + 'final') === -1 &&
-                       n.indexOf(prefix + 'main') === -1 &&
-                       n.indexOf(prefix + 'full') === -1 &&
+                return n.indexOf(spacedPrefix + 'final') === -1 &&
+                       n.indexOf(directPrefix + 'final') === -1 &&
+                       n.indexOf(spacedPrefix + 'main') === -1 &&
+                       n.indexOf(directPrefix + 'main') === -1 &&
+                       n.indexOf(spacedPrefix + 'full') === -1 &&
+                       n.indexOf(directPrefix + 'full') === -1 &&
                        n.indexOf('marking') === -1;
             });
 
@@ -1876,9 +1879,10 @@ MINIAPP_HTML = """
                 });
             } else {
                 var keyword = folderTutorTag + ' ' + folderType;
+                var compactKeyword = folderTutorTag + folderType;
                 folderFiles = folderAllFiles.filter(function(f) {
                     var n = f.file_name.toLowerCase();
-                    return n.indexOf(keyword) !== -1 && n.indexOf('marking') === -1;
+                    return (n.indexOf(keyword) !== -1 || n.indexOf(compactKeyword) !== -1) && n.indexOf('marking') === -1;
                 });
             }
 
@@ -1945,7 +1949,6 @@ MINIAPP_HTML = """
         }
 
         function selectSubject(subject, btnId) {
-            currentSubject = subject;
             document.querySelectorAll('.subject-card').forEach(function(b) { b.classList.remove('active'); });
             const active = document.getElementById(btnId);
             if (active) active.classList.add('active');
@@ -2225,6 +2228,8 @@ def api_tutors():
 @app.route('/api/tutor-buttons')
 def api_tutor_buttons():
     subject = request.args.get('subject', '')
+    if subject and not normalize_subject(subject):
+        return jsonify({"tutors": []})
     return jsonify({"tutors": get_tutor_buttons(subject=subject)})
 
 @app.route('/api/tutor-image/<tutor_id>')
@@ -2246,7 +2251,7 @@ def api_discussions_send():
     data = request.get_json(silent=True) or {}
     tutor = str(data.get('tutor', '')).strip().lower()
     user_id = data.get('user_id')
-    if tutor not in ("ap", "ad", "sd", "nj") or not str(user_id).strip():
+    if tutor not in DISCUSSION_TUTORS or not str(user_id).strip():
         return jsonify({"ok": False, "error": "Invalid request"}), 400
     try:
         status = get_subscription_status(int(user_id))

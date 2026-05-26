@@ -1170,102 +1170,188 @@ MINIAPP_HTML = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>PaperBot - Past Papers</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
     <style>
         :root {
-            --tg-bg: #f5f7fa;
-            --tg-accent: #2563eb;
-            --tg-card: #ffffff;
+            --bg: #eef3ff;
+            --bg-grad-1: #f6f8ff;
+            --bg-grad-2: #eaf0ff;
+            --text: #0f172a;
+            --muted: #5b6880;
+            --line: rgba(37, 99, 235, 0.18);
+            --accent: #3b82f6;
+            --accent-strong: #2563eb;
+            --card-bg: rgba(255, 255, 255, 0.78);
+            --card-shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
+            --glass-border: rgba(255, 255, 255, 0.5);
+            --danger: #ef4444;
+            --warning: #f59e0b;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #0b1220;
+                --bg-grad-1: #0d1628;
+                --bg-grad-2: #121a2d;
+                --text: #e5edff;
+                --muted: #95a2c4;
+                --line: rgba(147, 197, 253, 0.26);
+                --accent: #60a5fa;
+                --accent-strong: #3b82f6;
+                --card-bg: rgba(15, 23, 42, 0.65);
+                --card-shadow: 0 20px 48px rgba(2, 6, 23, 0.5);
+                --glass-border: rgba(148, 163, 184, 0.22);
+                --danger: #f87171;
+                --warning: #fbbf24;
+            }
         }
         body {
-            background: var(--tg-bg);
-            font-family: 'Segoe UI', sans-serif;
+            background: radial-gradient(1200px 620px at -10% -20%, rgba(59, 130, 246, 0.24), transparent 55%),
+                        radial-gradient(980px 560px at 120% -10%, rgba(125, 211, 252, 0.25), transparent 58%),
+                        linear-gradient(155deg, var(--bg-grad-1), var(--bg-grad-2));
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+            color: var(--text);
             min-height: 100vh;
-            padding-bottom: 20px;
+            margin: 0;
+            padding: 14px 12px 24px;
         }
-        .app-header {
-            background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%);
-            color: white;
-            padding: 18px 16px 14px;
-            text-align: center;
+        .app-shell {
+            max-width: 720px;
+            margin: 0 auto;
         }
-        .app-header h1 {
-            font-size: 1.3rem;
+        .surface {
+            background: var(--card-bg);
+            border: 1px solid var(--glass-border);
+            box-shadow: var(--card-shadow);
+            border-radius: 20px;
+            backdrop-filter: blur(14px);
+            -webkit-backdrop-filter: blur(14px);
+        }
+        .topbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+            padding: 14px 16px;
+            margin-bottom: 12px;
+        }
+        .topbar-title {
+            margin: 0;
+            font-size: 1.08rem;
+            font-weight: 800;
+            letter-spacing: -0.02em;
+            color: var(--text);
+        }
+        .topbar-subtitle {
+            margin: 3px 0 0;
+            font-size: 0.78rem;
+            color: var(--muted);
+            font-weight: 500;
+        }
+        .admin-badge {
+            background: linear-gradient(130deg, var(--accent), var(--accent-strong));
+            border-radius: 999px;
+            padding: 6px 10px;
+            font-size: 0.69rem;
             font-weight: 700;
+            color: #fff;
+            letter-spacing: 0.03em;
+            white-space: nowrap;
+            box-shadow: 0 8px 18px rgba(37, 99, 235, 0.34);
             margin: 0;
         }
-        .app-header p {
-            font-size: 0.8rem;
-            margin: 4px 0 0;
-            opacity: 0.85;
-        }
         .search-section {
-            padding: 14px 16px;
+            padding: 14px;
+            margin-bottom: 12px;
         }
         .search-bar {
-            border-radius: 12px;
-            border: 2px solid #e2e8f0;
-            padding: 10px 16px;
+            border-radius: 14px;
+            border: 1px solid var(--line);
+            background: rgba(255, 255, 255, 0.56);
+            color: var(--text);
+            padding: 11px 14px;
             font-size: 0.95rem;
-            transition: border-color 0.2s;
+            transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+        }
+        @media (prefers-color-scheme: dark) {
+            .search-bar {
+                background: rgba(15, 23, 42, 0.55);
+            }
         }
         .search-bar:focus {
-            border-color: var(--tg-accent);
-            box-shadow: 0 0 0 3px rgba(37,99,235,0.12);
+            border-color: var(--accent);
+            box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.16);
             outline: none;
         }
         .search-btn {
-            border-radius: 12px;
-            background: var(--tg-accent);
+            border-radius: 14px !important;
+            background: linear-gradient(135deg, var(--accent), var(--accent-strong));
             border: none;
-            padding: 10px 16px;
+            padding: 10px 15px;
             color: white;
-            font-weight: 600;
+            font-weight: 700;
+            box-shadow: 0 10px 20px rgba(37, 99, 235, 0.24);
+        }
+        .search-btn:hover {
+            filter: brightness(1.03);
+        }
+        .search-btn:active {
+            transform: translateY(1px);
         }
         .section-title {
-            font-size: 0.85rem;
+            font-size: 0.74rem;
             font-weight: 700;
-            color: #64748b;
+            color: var(--muted);
             text-transform: uppercase;
-            letter-spacing: 0.06em;
-            padding: 8px 16px 4px;
+            letter-spacing: 0.13em;
+            padding: 4px 8px 8px;
+        }
+        .content-card {
+            padding: 14px;
+            margin-bottom: 12px;
         }
         .tutors-grid {
-            display: flex;
-            gap: 12px;
-            padding: 8px 16px 12px;
-            justify-content: center;
-            flex-wrap: wrap;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+            gap: 11px;
+            padding: 4px 0;
         }
         .tutor-btn {
             display: flex;
             flex-direction: column;
             align-items: center;
             cursor: pointer;
-            border: none;
+            border: 1px solid transparent;
+            border-radius: 16px;
             background: transparent;
-            padding: 0;
-            flex: 0 0 calc(33% - 10px);
-            max-width: 110px;
+            padding: 8px 8px 10px;
+            max-width: 100%;
+            transition: all 0.2s ease;
+        }
+        .tutor-btn:hover {
+            border-color: var(--line);
+            background: rgba(255, 255, 255, 0.2);
         }
         .tutor-btn:active .tutor-img-wrap {
-            transform: scale(0.95);
+            transform: scale(0.96);
         }
         .tutor-img-wrap {
             width: 100%;
             aspect-ratio: 1 / 1;
-            border-radius: 12px;
+            border-radius: 14px;
             overflow: hidden;
             border: 3px solid transparent;
-            background: #e2e8f0;
+            background: rgba(148, 163, 184, 0.28);
             transition: border-color 0.2s, transform 0.15s;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.10);
+            box-shadow: 0 8px 18px rgba(15, 23, 42, 0.12);
         }
         .tutor-btn.active .tutor-img-wrap,
         .tutor-btn:hover .tutor-img-wrap {
-            border-color: var(--tg-accent);
-            box-shadow: 0 4px 14px rgba(37,99,235,0.25);
+            border-color: var(--accent);
+            box-shadow: 0 12px 22px rgba(37, 99, 235, 0.28);
         }
         .tutor-img-wrap img {
             width: 100%;
@@ -1275,82 +1361,98 @@ MINIAPP_HTML = """
         }
         .tutor-name {
             margin-top: 6px;
-            font-size: 0.72rem;
+            font-size: 0.74rem;
             font-weight: 600;
-            color: #1e3a8a;
+            color: var(--text);
             text-align: center;
-            line-height: 1.3;
+            line-height: 1.25;
         }
         .results-section {
-            padding: 0 16px;
+            padding: 0;
         }
         .result-card {
-            background: var(--tg-card);
-            border-radius: 12px;
-            padding: 12px 14px;
-            margin-bottom: 8px;
+            background: rgba(255, 255, 255, 0.72);
+            border-radius: 14px;
+            padding: 11px 12px;
+            margin-bottom: 9px;
             display: flex;
             align-items: center;
             justify-content: space-between;
-            box-shadow: 0 1px 4px rgba(0,0,0,0.08);
-            border: 1px solid #e2e8f0;
+            box-shadow: 0 8px 24px rgba(15, 23, 42, 0.09);
+            border: 1px solid var(--glass-border);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+        }
+        @media (prefers-color-scheme: dark) {
+            .result-card {
+                background: rgba(15, 23, 42, 0.66);
+            }
         }
         .result-name {
             font-size: 0.88rem;
             font-weight: 500;
-            color: #1e293b;
+            color: var(--text);
             flex: 1;
             margin-right: 10px;
             word-break: break-word;
         }
         .download-btn {
-            background: var(--tg-accent);
+            background: linear-gradient(135deg, var(--accent), var(--accent-strong));
             color: white;
             border: none;
-            border-radius: 8px;
+            border-radius: 10px;
             padding: 6px 12px;
             font-size: 0.8rem;
-            font-weight: 600;
+            font-weight: 700;
             white-space: nowrap;
             cursor: pointer;
-            transition: background 0.2s;
+            transition: filter 0.2s;
         }
         .download-btn:hover {
-            background: #1d4ed8;
+            filter: brightness(1.06);
         }
         .empty-state {
             text-align: center;
-            padding: 30px 20px;
-            color: #94a3b8;
+            padding: 26px 14px;
+            color: var(--muted);
+            border: 1px dashed var(--line);
+            border-radius: 14px;
+            background: rgba(255, 255, 255, 0.34);
+        }
+        @media (prefers-color-scheme: dark) {
+            .empty-state {
+                background: rgba(15, 23, 42, 0.35);
+            }
         }
         .empty-state i {
-            font-size: 2.5rem;
+            font-size: 2.2rem;
             display: block;
             margin-bottom: 8px;
         }
         .loading-spinner {
             display: none;
             text-align: center;
-            padding: 20px;
+            padding: 16px 0 14px;
         }
         .toast-msg {
             position: fixed;
-            bottom: 20px;
+            bottom: 22px;
             left: 50%;
             transform: translateX(-50%);
-            background: #1e293b;
+            background: rgba(15, 23, 42, 0.92);
             color: white;
             padding: 10px 20px;
-            border-radius: 20px;
+            border-radius: 999px;
             font-size: 0.85rem;
             z-index: 9999;
             display: none;
             white-space: nowrap;
+            border: 1px solid rgba(148, 163, 184, 0.25);
         }
         .sub-overlay {
             position: fixed;
             top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(15,23,42,0.96);
+            background: rgba(2, 6, 23, 0.78);
             z-index: 99999;
             display: flex;
             align-items: center;
@@ -1372,29 +1474,19 @@ MINIAPP_HTML = """
         }
         .sub-overlay-btn {
             display: inline-block;
-            background: #2563eb;
+            background: linear-gradient(135deg, var(--accent), var(--accent-strong));
             color: white;
-            border-radius: 10px;
+            border-radius: 999px;
             padding: 10px 22px;
             font-weight: 600;
             text-decoration: none;
             margin: 5px;
         }
-        .admin-badge {
-            background: rgba(255,255,255,0.2);
-            border-radius: 6px;
-            padding: 2px 10px;
-            font-size: 0.7rem;
-            font-weight: 700;
-            margin-top: 5px;
-            display: inline-block;
-            letter-spacing: 0.05em;
-        }
         .delete-btn {
-            background: #ef4444;
+            background: var(--danger);
             color: white;
             border: none;
-            border-radius: 8px;
+            border-radius: 10px;
             padding: 6px 10px;
             font-size: 0.8rem;
             font-weight: 600;
@@ -1405,78 +1497,99 @@ MINIAPP_HTML = """
             flex-shrink: 0;
         }
         .delete-btn:hover {
-            background: #dc2626;
+            filter: brightness(1.04);
         }
         .ap-folder-btn {
-            background: var(--tg-card);
-            border-radius: 12px;
-            padding: 12px 14px;
-            margin-bottom: 8px;
+            background: rgba(255, 255, 255, 0.72);
+            border-radius: 14px;
+            padding: 12px 13px;
+            margin-bottom: 9px;
             display: flex;
             align-items: center;
-            box-shadow: 0 1px 4px rgba(0,0,0,0.08);
-            border: 1px solid #e2e8f0;
+            box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+            border: 1px solid var(--glass-border);
             cursor: pointer;
             transition: background 0.15s;
             font-size: 0.9rem;
             font-weight: 600;
-            color: #1e293b;
+            color: var(--text);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+        }
+        @media (prefers-color-scheme: dark) {
+            .ap-folder-btn {
+                background: rgba(15, 23, 42, 0.66);
+            }
         }
         .ap-folder-btn:active {
-            background: #f1f5f9;
+            filter: brightness(0.98);
         }
         .ap-folder-count {
-            background: #e2e8f0;
-            border-radius: 12px;
+            background: rgba(148, 163, 184, 0.2);
+            border-radius: 999px;
             padding: 2px 8px;
             font-size: 0.78rem;
             font-weight: 700;
-            color: #64748b;
+            color: var(--muted);
             margin-left: 8px;
         }
         .ap-back-btn {
-            background: #f1f5f9;
-            color: #475569;
+            background: rgba(148, 163, 184, 0.16);
+            color: var(--muted);
             margin-bottom: 10px;
+        }
+        .discussion-grid .search-btn {
+            width: 100%;
+            padding: 9px 10px;
         }
     </style>
 </head>
 <body>
-    <div class="app-header">
-        <h1>📚 LearnX PaperBot</h1>
-        <p>Find & Download Papers Instantly</p>
-        <div id="adminBadge" class="admin-badge" style="display:none;">🛡️ Admin Mode</div>
-    </div>
-
-    <div class="search-section">
-        <div class="input-group">
-            <input type="text" id="searchInput" class="form-control search-bar"
-                   placeholder="Search papers (e.g. ap s2 paper 01)..."
-                   autocomplete="off" autocorrect="off" spellcheck="false">
-            <button class="search-btn" onclick="doSearch()">
-                <i class="bi bi-search"></i>
-            </button>
+    <div class="app-shell">
+        <div class="topbar surface">
+            <div>
+                <h1 class="topbar-title">📚 LearnX PaperBot</h1>
+                <p class="topbar-subtitle">Find &amp; download papers instantly</p>
+            </div>
+            <div id="adminBadge" class="admin-badge" style="display:none;">🛡️ Admin Mode</div>
         </div>
-    </div>
 
-    <div class="section-title">Browse by Tutor</div>
-    <div class="tutors-grid" id="tutorsGrid"></div>
+        <div class="search-section surface">
+            <div class="input-group">
+                <input type="text" id="searchInput" class="form-control search-bar"
+                       placeholder="Search papers (e.g. ap s2 paper 01)..."
+                       autocomplete="off" autocorrect="off" spellcheck="false">
+                <button class="search-btn" onclick="doSearch()">
+                    <i class="bi bi-search"></i>
+                </button>
+            </div>
+        </div>
 
-    <div class="section-title">Discussions</div>
-    <div class="tutors-grid">
-        <button class="search-btn" type="button" onclick="sendDiscussion('ap')">AP</button>
-        <button class="search-btn" type="button" onclick="sendDiscussion('ad')">AD</button>
-        <button class="search-btn" type="button" onclick="sendDiscussion('sd')">SD</button>
-    </div>
+        <div class="content-card surface">
+            <div class="section-title">Browse by Tutor</div>
+            <div class="tutors-grid" id="tutorsGrid"></div>
+        </div>
 
-    <div class="section-title" id="resultsTitle" style="display:none;">Results</div>
-    <div class="loading-spinner" id="loadingSpinner">
-        <div class="spinner-border text-primary" role="status"></div>
-    </div>
-    <div class="results-section" id="resultsContainer">
-        <div class="empty-state">
-            <i class="bi bi-search"></i>
-            <p>Search for papers above or tap a tutor to browse their papers.</p>
+        <div class="content-card surface">
+            <div class="section-title">Discussions</div>
+            <div class="tutors-grid discussion-grid">
+                <button class="search-btn" type="button" onclick="sendDiscussion('ap')">AP</button>
+                <button class="search-btn" type="button" onclick="sendDiscussion('ad')">AD</button>
+                <button class="search-btn" type="button" onclick="sendDiscussion('sd')">SD</button>
+            </div>
+        </div>
+
+        <div class="content-card surface">
+            <div class="section-title" id="resultsTitle" style="display:none;">Results</div>
+            <div class="loading-spinner" id="loadingSpinner">
+                <div class="spinner-border text-primary" role="status"></div>
+            </div>
+            <div class="results-section" id="resultsContainer">
+                <div class="empty-state">
+                    <i class="bi bi-search"></i>
+                    <p>Search for papers above or tap a tutor to browse their papers.</p>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -2163,7 +2276,6 @@ if __name__ == '__main__':
     bot.remove_webhook()
     bot.set_webhook(url=f"{URL}/webhook")
     app.run(host="0.0.0.0", port=int(os.environ.get('PORT', 5000)))
-
 
 
 

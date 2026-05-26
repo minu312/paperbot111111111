@@ -29,8 +29,6 @@ ADMIN_CHANNEL_ID = os.environ.get('ADMIN_CHANNEL_ID')
 DISCUSSION_AP_MSG_ID = os.environ.get('DISCUSSION_AP_MSG_ID', '')
 DISCUSSION_AD_MSG_ID = os.environ.get('DISCUSSION_AD_MSG_ID', '')
 DISCUSSION_SD_MSG_ID = os.environ.get('DISCUSSION_SD_MSG_ID', '')
-DISCUSSION_NJ_MSG_ID = os.environ.get('DISCUSSION_NJ_MSG_ID', '')
-DISCUSSION_TUTORS = ("ap", "ad", "sd", "nj")
 
 # Setup Caption Variable (Updated with symbols and bold text)
 DEFAULT_CAPTION = (
@@ -59,14 +57,11 @@ tutor_buttons_col = db['tutor_buttons']
 broadcast_logs_col = db['broadcast_logs']
 banned_users_col = db['banned_users']
 
-SUBJECT_ALIASES = {
-    "physics": "physics",
-    "chemistry": "chemistry",
-    "biology": "biology",
-    "combined maths": "combined_maths",
-}
-ADD_BUTTON_SUBJECT_USAGE = "|".join(SUBJECT_ALIASES.keys())
-DISCUSSION_TUTOR_REGEX = re.compile(r'\b(?:' + '|'.join(DISCUSSION_TUTORS) + r')\b')
+DEFAULT_TUTOR_BUTTONS = [
+    {"name": "Anuradha Perera", "search_tag": "ap", "image_url": "/static/ap.jpg"},
+    {"name": "Amila Dasanayaka", "search_tag": "ad", "image_url": "/static/ad.jpg"},
+    {"name": "Sashanka Danujaya", "search_tag": "sd", "image_url": "/static/sd.jpg"},
+]
 
 # Number of results to show per page in bot search results
 PAGE_SIZE = 8
@@ -100,29 +95,10 @@ def tutor_search_tag_from_name(name):
 def tutor_key(name):
     return re.sub(r'\s+', ' ', name.strip().lower())
 
-def normalize_subject(subject):
-    normalized = re.sub(r'[_\s]+', ' ', str(subject or '').strip().lower())
-    return SUBJECT_ALIASES.get(normalized, "")
-
-def parse_subject_prefixed_tutor_name(raw):
-    cleaned = re.sub(r'\s+', ' ', str(raw or '').strip())
-    if not cleaned:
-        return "", ""
-    lower = cleaned.lower()
-    for alias in sorted(SUBJECT_ALIASES.keys(), key=len, reverse=True):
-        prefix = alias + " "
-        if lower.startswith(prefix):
-            return normalize_subject(alias), cleaned[len(prefix):].strip()
-    return "", cleaned
-
-def get_tutor_buttons(subject=""):
+def get_tutor_buttons():
     tutors = []
-    normalized_subject = normalize_subject(subject)
-    mongo_query = {}
-    if normalized_subject:
-        mongo_query["subject"] = normalized_subject
     try:
-        for t in tutor_buttons_col.find(mongo_query, {"_id": 1, "name": 1, "search_tag": 1, "image_file_id": 1, "image_url": 1, "subject": 1}).sort("name", 1):
+        for t in tutor_buttons_col.find({}, {"_id": 1, "name": 1, "search_tag": 1, "image_file_id": 1, "image_url": 1}).sort("name", 1):
             image_url = t.get("image_url") or ""
             if not image_url and t.get("image_file_id"):
                 image_url = f"/api/tutor-image/{str(t['_id'])}"
@@ -130,12 +106,11 @@ def get_tutor_buttons(subject=""):
                 "id": str(t["_id"]),
                 "name": t.get("name", ""),
                 "search_tag": t.get("search_tag", ""),
-                "image_url": image_url,
-                "subject": normalize_subject(t.get("subject"))
+                "image_url": image_url
             })
     except Exception as e:
         logging.error("Failed to load tutor buttons: %s", e)
-    return tutors
+    return tutors or DEFAULT_TUTOR_BUTTONS
 
 def _extract_msg_id_from_token(token):
     cleaned = token.strip()
@@ -157,7 +132,6 @@ def send_discussion_messages(target_chat_id, tutor):
         "ap": DISCUSSION_AP_MSG_ID,
         "ad": DISCUSSION_AD_MSG_ID,
         "sd": DISCUSSION_SD_MSG_ID,
-        "nj": DISCUSSION_NJ_MSG_ID,
     }
     raw_refs = refs_by_tutor.get(str(tutor).lower(), "")
     tokens = [t for t in re.split(r'[\s,]+', raw_refs.strip()) if t]
@@ -185,11 +159,12 @@ def send_discussion_messages(target_chat_id, tutor):
 
 def send_discussion_tutor_buttons(chat_id, reply_to_message_id=None):
     markup = InlineKeyboardMarkup()
-    markup.row_width = 4
-    markup.add(*[
-        InlineKeyboardButton(t.upper(), callback_data=f"discussion_tutor:{t}")
-        for t in DISCUSSION_TUTORS
-    ])
+    markup.row_width = 3
+    markup.add(
+        InlineKeyboardButton("AP", callback_data="discussion_tutor:ap"),
+        InlineKeyboardButton("AD", callback_data="discussion_tutor:ad"),
+        InlineKeyboardButton("SD", callback_data="discussion_tutor:sd"),
+    )
     bot.send_message(chat_id, "Please choose a tutor:", reply_markup=markup, reply_to_message_id=reply_to_message_id)
 
 def get_subscription_status(user_id):
@@ -379,10 +354,10 @@ def add_tutor_button(message):
     command_text = (message.text or message.caption or '').strip()
     parts = command_text.split(None, 1)
     if len(parts) < 2 or not parts[1].strip():
-        bot.reply_to(message, f"Usage: /addbutton [{ADD_BUTTON_SUBJECT_USAGE}] <Tutor Name> (attach a photo optionally)")
+        bot.reply_to(message, "Usage: /addbutton <Tutor Name> (attach a photo optionally)")
         return
 
-    subject, tutor_name = parse_subject_prefixed_tutor_name(parts[1])
+    tutor_name = parts[1].strip()
     search_tag = tutor_search_tag_from_name(tutor_name)
     if not search_tag:
         bot.reply_to(message, "⚠️ Invalid tutor name.")
@@ -397,8 +372,6 @@ def add_tutor_button(message):
         "name_key": tutor_key(tutor_name),
         "search_tag": search_tag
     }
-    if subject:
-        update["subject"] = subject
     if image_file_id:
         update["image_file_id"] = image_file_id
         update["image_url"] = ""
@@ -409,10 +382,7 @@ def add_tutor_button(message):
             {"$set": update, "$setOnInsert": {"created_at": datetime.now(timezone.utc)}},
             upsert=True
         )
-        if subject:
-            bot.reply_to(message, f"✅ Tutor button saved: {tutor_name} ({subject.replace('_', ' ')})")
-        else:
-            bot.reply_to(message, f"✅ Tutor button saved: {tutor_name}")
+        bot.reply_to(message, f"✅ Tutor button saved: {tutor_name}")
     except Exception as e:
         logging.error("Failed to save tutor button '%s': %s", tutor_name, e)
         bot.reply_to(message, "⚠️ Failed to save tutor button. Please try again.")
@@ -852,9 +822,9 @@ def search_files_text(message):
         return
 
     if re.search(r'\bdiscussions?\b', lower_text):
-        tutor_match = DISCUSSION_TUTOR_REGEX.search(lower_text)
+        tutor_match = re.search(r'\b(ap|ad|sd)\b', lower_text)
         if tutor_match:
-            ok, err = send_discussion_messages(message.chat.id, tutor_match.group(0))
+            ok, err = send_discussion_messages(message.chat.id, tutor_match.group(1))
             if not ok:
                 bot.reply_to(message, err)
         else:
@@ -947,7 +917,7 @@ def verify_subscription_callback(call):
 @bot.callback_query_handler(func=lambda call: call.data.startswith('discussion_tutor:'))
 def discussion_tutor_callback(call):
     tutor = call.data.split(':', 1)[1] if ':' in call.data else ""
-    if tutor not in DISCUSSION_TUTORS:
+    if tutor not in ("ap", "ad", "sd"):
         bot.answer_callback_query(call.id, "Invalid tutor", show_alert=True)
         return
     ok, err = send_discussion_messages(call.message.chat.id, tutor)
@@ -1200,220 +1170,102 @@ MINIAPP_HTML = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>PaperBot - Past Papers</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
     <style>
         :root {
-            --bg: #eef3ff;
-            --bg-grad-1: #f6f8ff;
-            --bg-grad-2: #eaf0ff;
-            --text: #0f172a;
-            --muted: #5b6880;
-            --line: rgba(37, 99, 235, 0.18);
-            --accent: #3b82f6;
-            --accent-strong: #2563eb;
-            --card-bg: rgba(255, 255, 255, 0.78);
-            --card-shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
-            --glass-border: rgba(255, 255, 255, 0.5);
-            --danger: #ef4444;
-            --warning: #f59e0b;
-        }
-        @media (prefers-color-scheme: dark) {
-            :root {
-                --bg: #0b1220;
-                --bg-grad-1: #0d1628;
-                --bg-grad-2: #121a2d;
-                --text: #e5edff;
-                --muted: #95a2c4;
-                --line: rgba(147, 197, 253, 0.26);
-                --accent: #60a5fa;
-                --accent-strong: #3b82f6;
-                --card-bg: rgba(15, 23, 42, 0.65);
-                --card-shadow: 0 20px 48px rgba(2, 6, 23, 0.5);
-                --glass-border: rgba(148, 163, 184, 0.22);
-                --danger: #f87171;
-                --warning: #fbbf24;
-            }
+            --tg-bg: #f5f7fa;
+            --tg-accent: #2563eb;
+            --tg-card: #ffffff;
         }
         body {
-            background: radial-gradient(1200px 620px at -10% -20%, rgba(59, 130, 246, 0.24), transparent 55%),
-                        radial-gradient(980px 560px at 120% -10%, rgba(125, 211, 252, 0.25), transparent 58%),
-                        linear-gradient(155deg, var(--bg-grad-1), var(--bg-grad-2));
-            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
-            color: var(--text);
+            background: var(--tg-bg);
+            font-family: 'Segoe UI', sans-serif;
             min-height: 100vh;
-            margin: 0;
-            padding: 14px 12px 24px;
+            padding-bottom: 20px;
         }
-        .app-shell {
-            max-width: 720px;
-            margin: 0 auto;
+        .app-header {
+            background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%);
+            color: white;
+            padding: 18px 16px 14px;
+            text-align: center;
         }
-        .surface {
-            background: var(--card-bg);
-            border: 1px solid var(--glass-border);
-            box-shadow: var(--card-shadow);
-            border-radius: 20px;
-            backdrop-filter: blur(14px);
-            -webkit-backdrop-filter: blur(14px);
-        }
-        .topbar {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 10px;
-            padding: 14px 16px;
-            margin-bottom: 12px;
-        }
-        .topbar-title {
-            margin: 0;
-            font-size: 1.08rem;
-            font-weight: 800;
-            letter-spacing: -0.02em;
-            color: var(--text);
-        }
-        .topbar-subtitle {
-            margin: 3px 0 0;
-            font-size: 0.78rem;
-            color: var(--muted);
-            font-weight: 500;
-        }
-        .admin-badge {
-            background: linear-gradient(130deg, var(--accent), var(--accent-strong));
-            border-radius: 999px;
-            padding: 6px 10px;
-            font-size: 0.69rem;
+        .app-header h1 {
+            font-size: 1.3rem;
             font-weight: 700;
-            color: #fff;
-            letter-spacing: 0.03em;
-            white-space: nowrap;
-            box-shadow: 0 8px 18px rgba(37, 99, 235, 0.34);
             margin: 0;
+        }
+        .app-header p {
+            font-size: 0.8rem;
+            margin: 4px 0 0;
+            opacity: 0.85;
         }
         .search-section {
-            padding: 14px;
-            margin-bottom: 12px;
+            padding: 14px 16px;
         }
         .search-bar {
-            border-radius: 14px;
-            border: 1px solid var(--line);
-            background: rgba(255, 255, 255, 0.56);
-            color: var(--text);
-            padding: 11px 14px;
+            border-radius: 12px;
+            border: 2px solid #e2e8f0;
+            padding: 10px 16px;
             font-size: 0.95rem;
-            transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
-        }
-        @media (prefers-color-scheme: dark) {
-            .search-bar {
-                background: rgba(15, 23, 42, 0.55);
-            }
+            transition: border-color 0.2s;
         }
         .search-bar:focus {
-            border-color: var(--accent);
-            box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.16);
+            border-color: var(--tg-accent);
+            box-shadow: 0 0 0 3px rgba(37,99,235,0.12);
             outline: none;
         }
         .search-btn {
-            border-radius: 14px !important;
-            background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+            border-radius: 12px;
+            background: var(--tg-accent);
             border: none;
-            padding: 10px 15px;
+            padding: 10px 16px;
             color: white;
-            font-weight: 700;
-            box-shadow: 0 10px 20px rgba(37, 99, 235, 0.24);
-        }
-        .search-btn:hover {
-            filter: brightness(1.03);
-        }
-        .search-btn:active {
-            transform: translateY(1px);
+            font-weight: 600;
         }
         .section-title {
-            font-size: 0.74rem;
+            font-size: 0.85rem;
             font-weight: 700;
-            color: var(--muted);
+            color: #64748b;
             text-transform: uppercase;
-            letter-spacing: 0.13em;
-            padding: 4px 8px 8px;
-        }
-        .content-card {
-            padding: 14px;
-            margin-bottom: 12px;
-        }
-        .subject-grid {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 10px;
-            margin-bottom: 10px;
-        }
-        .subject-card {
-            border: 1px solid var(--line);
-            border-radius: 16px;
-            padding: 12px;
-            text-align: left;
-            background: rgba(255, 255, 255, 0.36);
-            color: var(--text);
-            cursor: pointer;
-            font-weight: 700;
-            box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
-            transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
-        }
-        .subject-card small {
-            display: block;
-            font-weight: 500;
-            color: var(--muted);
-            margin-top: 4px;
-        }
-        .subject-card.active,
-        .subject-card:hover {
-            border-color: var(--accent);
-            box-shadow: 0 12px 24px rgba(37, 99, 235, 0.2);
-        }
-        .subject-card:active {
-            transform: translateY(1px);
+            letter-spacing: 0.06em;
+            padding: 8px 16px 4px;
         }
         .tutors-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
-            gap: 11px;
-            padding: 4px 0;
+            display: flex;
+            gap: 12px;
+            padding: 8px 16px 12px;
+            justify-content: center;
+            flex-wrap: wrap;
         }
         .tutor-btn {
             display: flex;
             flex-direction: column;
             align-items: center;
             cursor: pointer;
-            border: 1px solid transparent;
-            border-radius: 16px;
+            border: none;
             background: transparent;
-            padding: 8px 8px 10px;
-            max-width: 100%;
-            transition: all 0.2s ease;
-        }
-        .tutor-btn:hover {
-            border-color: var(--line);
-            background: rgba(255, 255, 255, 0.2);
+            padding: 0;
+            flex: 0 0 calc(33% - 10px);
+            max-width: 110px;
         }
         .tutor-btn:active .tutor-img-wrap {
-            transform: scale(0.96);
+            transform: scale(0.95);
         }
         .tutor-img-wrap {
             width: 100%;
             aspect-ratio: 1 / 1;
-            border-radius: 14px;
+            border-radius: 12px;
             overflow: hidden;
             border: 3px solid transparent;
-            background: rgba(148, 163, 184, 0.28);
+            background: #e2e8f0;
             transition: border-color 0.2s, transform 0.15s;
-            box-shadow: 0 8px 18px rgba(15, 23, 42, 0.12);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.10);
         }
         .tutor-btn.active .tutor-img-wrap,
         .tutor-btn:hover .tutor-img-wrap {
-            border-color: var(--accent);
-            box-shadow: 0 12px 22px rgba(37, 99, 235, 0.28);
+            border-color: var(--tg-accent);
+            box-shadow: 0 4px 14px rgba(37,99,235,0.25);
         }
         .tutor-img-wrap img {
             width: 100%;
@@ -1423,98 +1275,82 @@ MINIAPP_HTML = """
         }
         .tutor-name {
             margin-top: 6px;
-            font-size: 0.74rem;
+            font-size: 0.72rem;
             font-weight: 600;
-            color: var(--text);
+            color: #1e3a8a;
             text-align: center;
-            line-height: 1.25;
+            line-height: 1.3;
         }
         .results-section {
-            padding: 0;
+            padding: 0 16px;
         }
         .result-card {
-            background: rgba(255, 255, 255, 0.72);
-            border-radius: 14px;
-            padding: 11px 12px;
-            margin-bottom: 9px;
+            background: var(--tg-card);
+            border-radius: 12px;
+            padding: 12px 14px;
+            margin-bottom: 8px;
             display: flex;
             align-items: center;
             justify-content: space-between;
-            box-shadow: 0 8px 24px rgba(15, 23, 42, 0.09);
-            border: 1px solid var(--glass-border);
-            backdrop-filter: blur(8px);
-            -webkit-backdrop-filter: blur(8px);
-        }
-        @media (prefers-color-scheme: dark) {
-            .result-card {
-                background: rgba(15, 23, 42, 0.66);
-            }
+            box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+            border: 1px solid #e2e8f0;
         }
         .result-name {
             font-size: 0.88rem;
             font-weight: 500;
-            color: var(--text);
+            color: #1e293b;
             flex: 1;
             margin-right: 10px;
             word-break: break-word;
         }
         .download-btn {
-            background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+            background: var(--tg-accent);
             color: white;
             border: none;
-            border-radius: 10px;
+            border-radius: 8px;
             padding: 6px 12px;
             font-size: 0.8rem;
-            font-weight: 700;
+            font-weight: 600;
             white-space: nowrap;
             cursor: pointer;
-            transition: filter 0.2s;
+            transition: background 0.2s;
         }
         .download-btn:hover {
-            filter: brightness(1.06);
+            background: #1d4ed8;
         }
         .empty-state {
             text-align: center;
-            padding: 26px 14px;
-            color: var(--muted);
-            border: 1px dashed var(--line);
-            border-radius: 14px;
-            background: rgba(255, 255, 255, 0.34);
-        }
-        @media (prefers-color-scheme: dark) {
-            .empty-state {
-                background: rgba(15, 23, 42, 0.35);
-            }
+            padding: 30px 20px;
+            color: #94a3b8;
         }
         .empty-state i {
-            font-size: 2.2rem;
+            font-size: 2.5rem;
             display: block;
             margin-bottom: 8px;
         }
         .loading-spinner {
             display: none;
             text-align: center;
-            padding: 16px 0 14px;
+            padding: 20px;
         }
         .toast-msg {
             position: fixed;
-            bottom: 22px;
+            bottom: 20px;
             left: 50%;
             transform: translateX(-50%);
-            background: rgba(15, 23, 42, 0.92);
+            background: #1e293b;
             color: white;
             padding: 10px 20px;
-            border-radius: 999px;
+            border-radius: 20px;
             font-size: 0.85rem;
             z-index: 9999;
             display: none;
             white-space: nowrap;
-            border: 1px solid rgba(148, 163, 184, 0.25);
         }
         .sub-overlay {
             position: fixed;
             top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(2, 6, 23, 0.78);
+            background: rgba(15,23,42,0.96);
             z-index: 99999;
             display: flex;
             align-items: center;
@@ -1536,19 +1372,29 @@ MINIAPP_HTML = """
         }
         .sub-overlay-btn {
             display: inline-block;
-            background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+            background: #2563eb;
             color: white;
-            border-radius: 999px;
+            border-radius: 10px;
             padding: 10px 22px;
             font-weight: 600;
             text-decoration: none;
             margin: 5px;
         }
+        .admin-badge {
+            background: rgba(255,255,255,0.2);
+            border-radius: 6px;
+            padding: 2px 10px;
+            font-size: 0.7rem;
+            font-weight: 700;
+            margin-top: 5px;
+            display: inline-block;
+            letter-spacing: 0.05em;
+        }
         .delete-btn {
-            background: var(--danger);
+            background: #ef4444;
             color: white;
             border: none;
-            border-radius: 10px;
+            border-radius: 8px;
             padding: 6px 10px;
             font-size: 0.8rem;
             font-weight: 600;
@@ -1559,97 +1405,78 @@ MINIAPP_HTML = """
             flex-shrink: 0;
         }
         .delete-btn:hover {
-            filter: brightness(1.04);
+            background: #dc2626;
         }
         .ap-folder-btn {
-            background: rgba(255, 255, 255, 0.72);
-            border-radius: 14px;
-            padding: 12px 13px;
-            margin-bottom: 9px;
+            background: var(--tg-card);
+            border-radius: 12px;
+            padding: 12px 14px;
+            margin-bottom: 8px;
             display: flex;
             align-items: center;
-            box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
-            border: 1px solid var(--glass-border);
+            box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+            border: 1px solid #e2e8f0;
             cursor: pointer;
             transition: background 0.15s;
             font-size: 0.9rem;
             font-weight: 600;
-            color: var(--text);
-            backdrop-filter: blur(8px);
-            -webkit-backdrop-filter: blur(8px);
-        }
-        @media (prefers-color-scheme: dark) {
-            .ap-folder-btn {
-                background: rgba(15, 23, 42, 0.66);
-            }
+            color: #1e293b;
         }
         .ap-folder-btn:active {
-            filter: brightness(0.98);
+            background: #f1f5f9;
         }
         .ap-folder-count {
-            background: rgba(148, 163, 184, 0.2);
-            border-radius: 999px;
+            background: #e2e8f0;
+            border-radius: 12px;
             padding: 2px 8px;
             font-size: 0.78rem;
             font-weight: 700;
-            color: var(--muted);
+            color: #64748b;
             margin-left: 8px;
         }
         .ap-back-btn {
-            background: rgba(148, 163, 184, 0.16);
-            color: var(--muted);
+            background: #f1f5f9;
+            color: #475569;
             margin-bottom: 10px;
-        }
-        .discussion-mini-btn {
-            width: 100%;
-            margin-bottom: 10px;
-            padding: 8px 10px;
-        }
-        .discussion-grid .search-btn {
-            width: 100%;
-            padding: 9px 10px;
         }
     </style>
 </head>
 <body>
-    <div class="app-shell">
-        <div class="topbar surface">
-            <div>
-                <h1 class="topbar-title">📚 LearnX PaperBot</h1>
-                <p class="topbar-subtitle">Find &amp; download papers instantly</p>
-            </div>
-            <div id="adminBadge" class="admin-badge" style="display:none;">🛡️ Admin Mode</div>
-        </div>
+    <div class="app-header">
+        <h1>📚 LearnX PaperBot</h1>
+        <p>Find & Download Papers Instantly</p>
+        <div id="adminBadge" class="admin-badge" style="display:none;">🛡️ Admin Mode</div>
+    </div>
 
-        <div class="search-section surface">
-            <div class="input-group">
-                <input type="text" id="searchInput" class="form-control search-bar"
-                       placeholder="Search papers (e.g. ap s2 paper 01)..."
-                       autocomplete="off" autocorrect="off" spellcheck="false">
-                <button class="search-btn" onclick="doSearch()">
-                    <i class="bi bi-search"></i>
-                </button>
-            </div>
+    <div class="search-section">
+        <div class="input-group">
+            <input type="text" id="searchInput" class="form-control search-bar"
+                   placeholder="Search papers (e.g. ap s2 paper 01)..."
+                   autocomplete="off" autocorrect="off" spellcheck="false">
+            <button class="search-btn" onclick="doSearch()">
+                <i class="bi bi-search"></i>
+            </button>
         </div>
+    </div>
 
-        <div class="content-card surface">
-            <div class="section-title">Subjects</div>
-            <div class="subject-grid" id="subjectsGrid"></div>
-            <div class="section-title" id="tutorSectionTitle" style="display:none;">Tutors</div>
-            <div class="tutors-grid" id="tutorsGrid"></div>
-        </div>
+    <div class="section-title">Browse by Tutor</div>
+    <div class="tutors-grid" id="tutorsGrid"></div>
 
-        <div class="content-card surface">
-            <div class="section-title" id="resultsTitle" style="display:none;">Results</div>
-            <div class="loading-spinner" id="loadingSpinner">
-                <div class="spinner-border text-primary" role="status"></div>
-            </div>
-            <div class="results-section" id="resultsContainer">
-                <div class="empty-state">
-                    <i class="bi bi-search"></i>
-                    <p>Search for papers above or tap a tutor to browse their papers.</p>
-                </div>
-            </div>
+    <div class="section-title">Discussions</div>
+    <div class="tutors-grid">
+        <button class="search-btn" type="button" onclick="sendDiscussion('ap')">AP</button>
+        <button class="search-btn" type="button" onclick="sendDiscussion('ad')">AD</button>
+        <button class="search-btn" type="button" onclick="sendDiscussion('sd')">SD</button>
+    </div>
+
+    <div class="section-title" id="resultsTitle" style="display:none;">Results</div>
+    <div class="loading-spinner" id="loadingSpinner">
+        <div class="spinner-border text-primary" role="status"></div>
+    </div>
+    <div class="results-section" id="resultsContainer">
+        <div class="empty-state">
+            <i class="bi bi-search"></i>
+            <p>Search for papers above or tap a tutor to browse their papers.</p>
         </div>
     </div>
 
@@ -1719,18 +1546,8 @@ MINIAPP_HTML = """
             }
         })();
 
-        const SUBJECTS = [
-            { key: 'physics', label: 'Physics', hint: 'Browse physics tutors' },
-            { key: 'chemistry', label: 'Chemistry', hint: 'Browse chemistry tutors' },
-            { key: 'biology', label: 'Biology', hint: 'Browse biology tutors' },
-            { key: 'combined_maths', label: 'Combined Maths', hint: 'Browse combined maths tutors' }
-        ];
-        const DISCUSSION_TUTOR_TAGS = ['ap', 'ad', 'sd', 'nj'];
         let currentTag = null;
         let currentTutorLabel = null;
-        let folderAllFiles = [];
-        let folderTutorTag = '';
-        let folderTutorLabel = '';
         var isAdmin = false;
 
         function showToast(msg, dur) {
@@ -1765,65 +1582,50 @@ MINIAPP_HTML = """
             }).join('');
         }
 
-        function canShowDiscussion(tag) {
-            return DISCUSSION_TUTOR_TAGS.indexOf((tag || '').toLowerCase()) !== -1;
+        var apAllFiles = [];
+
+        function renderApResults(files) {
+            apAllFiles = files || [];
+            document.getElementById('resultsTitle').textContent = 'Results';
+            renderApRoot();
         }
 
-        function renderTutorFolderResults(files, tag, tutorLabel) {
-            folderAllFiles = files || [];
-            folderTutorTag = (tag || '').toLowerCase();
-            folderTutorLabel = tutorLabel || tag || 'Tutor';
-            document.getElementById('resultsTitle').textContent = folderTutorLabel + ' Papers';
-            renderTutorFolderRoot();
-        }
-
-        function renderTutorFolderRoot() {
+        function renderApRoot() {
             const container = document.getElementById('resultsContainer');
             const title = document.getElementById('resultsTitle');
-            var spacedPrefix = folderTutorTag + ' ';
-            var directPrefix = folderTutorTag;
 
-            var markingFiles = folderAllFiles.filter(function(f) {
+            var markingFiles = apAllFiles.filter(function(f) {
                 var n = f.file_name.toLowerCase();
                 return n.indexOf('marking') !== -1;
             });
-            var finalFiles = folderAllFiles.filter(function(f) {
+            var finalFiles = apAllFiles.filter(function(f) { 
                 var n = f.file_name.toLowerCase();
-                return (n.indexOf(spacedPrefix + 'final') !== -1 || n.indexOf(directPrefix + 'final') !== -1) && n.indexOf('marking') === -1;
+                return n.indexOf('ap final') !== -1 && n.indexOf('marking') === -1; 
             });
-            var mainFiles = folderAllFiles.filter(function(f) {
+            var mainFiles  = apAllFiles.filter(function(f) { 
                 var n = f.file_name.toLowerCase();
-                return (n.indexOf(spacedPrefix + 'main') !== -1 || n.indexOf(directPrefix + 'main') !== -1) && n.indexOf('marking') === -1;
+                return n.indexOf('ap main') !== -1 && n.indexOf('marking') === -1; 
             });
-            var fullFiles = folderAllFiles.filter(function(f) {
+            var fullFiles  = apAllFiles.filter(function(f) { 
                 var n = f.file_name.toLowerCase();
-                return (n.indexOf(spacedPrefix + 'full') !== -1 || n.indexOf(directPrefix + 'full') !== -1) && n.indexOf('marking') === -1;
+                return n.indexOf('ap full') !== -1 && n.indexOf('marking') === -1; 
             });
-            var otherFiles = folderAllFiles.filter(function(f) {
+            var otherFiles = apAllFiles.filter(function(f) {
                 var n = f.file_name.toLowerCase();
-                return n.indexOf(spacedPrefix + 'final') === -1 &&
-                       n.indexOf(directPrefix + 'final') === -1 &&
-                       n.indexOf(spacedPrefix + 'main') === -1 &&
-                       n.indexOf(directPrefix + 'main') === -1 &&
-                       n.indexOf(spacedPrefix + 'full') === -1 &&
-                       n.indexOf(directPrefix + 'full') === -1 &&
-                       n.indexOf('marking') === -1;
+                return n.indexOf('ap final') === -1 && n.indexOf('ap main') === -1 && n.indexOf('ap full') === -1 && n.indexOf('marking') === -1;
             });
 
-            if (!folderAllFiles.length) {
+            if (!apAllFiles.length) {
                 title.style.display = 'none';
-                container.innerHTML = '<div class="empty-state"><i class="bi bi-inbox"></i><p>No papers found for ' + escapeHtml(folderTutorLabel) + '.</p></div>';
+                container.innerHTML = '<div class="empty-state"><i class="bi bi-inbox"></i><p>No papers found for Anuradha Perera.</p></div>';
                 return;
             }
             title.style.display = 'block';
 
             var html = '';
-            if (canShowDiscussion(folderTutorTag)) {
-                html += '<button class="search-btn discussion-mini-btn" type="button" onclick="sendDiscussion(' + JSON.stringify(folderTutorTag) + ')"><i class="bi bi-chat-dots me-1"></i> Discussion</button>';
-            }
 
             if (markingFiles.length) {
-                html += '<div class="ap-folder-btn" onclick="openTutorFolder(\\'marking\\')">'
+                html += '<div class="ap-folder-btn" onclick="openApFolder(\\'marking\\')">'
                       + '<i class="bi bi-folder-fill text-warning me-2"></i>'
                       + '<span>markings</span>'
                       + '<span class="ap-folder-count">' + markingFiles.length + '</span>'
@@ -1831,7 +1633,7 @@ MINIAPP_HTML = """
                       + '</div>';
             }
             if (finalFiles.length) {
-                html += '<div class="ap-folder-btn" onclick="openTutorFolder(\\'final\\')">'
+                html += '<div class="ap-folder-btn" onclick="openApFolder(\\'final\\')">'
                       + '<i class="bi bi-folder-fill text-warning me-2"></i>'
                       + '<span>final papers</span>'
                       + '<span class="ap-folder-count">' + finalFiles.length + '</span>'
@@ -1839,7 +1641,7 @@ MINIAPP_HTML = """
                       + '</div>';
             }
             if (mainFiles.length) {
-                html += '<div class="ap-folder-btn" onclick="openTutorFolder(\\'main\\')">'
+                html += '<div class="ap-folder-btn" onclick="openApFolder(\\'main\\')">'
                       + '<i class="bi bi-folder-fill text-warning me-2"></i>'
                       + '<span>main papers</span>'
                       + '<span class="ap-folder-count">' + mainFiles.length + '</span>'
@@ -1847,7 +1649,7 @@ MINIAPP_HTML = """
                       + '</div>';
             }
             if (fullFiles.length) {
-                html += '<div class="ap-folder-btn" onclick="openTutorFolder(\\'full\\')">'
+                html += '<div class="ap-folder-btn" onclick="openApFolder(\\'full\\')">'
                       + '<i class="bi bi-folder-fill text-warning me-2"></i>'
                       + '<span>full papers</span>'
                       + '<span class="ap-folder-count">' + fullFiles.length + '</span>'
@@ -1869,31 +1671,26 @@ MINIAPP_HTML = """
             container.innerHTML = html;
         }
 
-        function openTutorFolder(folderType) {
+        function openApFolder(folderType) {
             var folderFiles = [];
             var folderLabel = folderType === 'marking' ? 'markings' : (folderType + ' papers');
 
             if (folderType === 'marking') {
-                folderFiles = folderAllFiles.filter(function(f) {
+                folderFiles = apAllFiles.filter(function(f) {
                     return f.file_name.toLowerCase().indexOf('marking') !== -1;
                 });
             } else {
-                var keyword = folderTutorTag + ' ' + folderType;
-                var compactKeyword = folderTutorTag + folderType;
-                folderFiles = folderAllFiles.filter(function(f) {
+                var keyword = 'ap ' + folderType;
+                folderFiles = apAllFiles.filter(function(f) {
                     var n = f.file_name.toLowerCase();
-                    return (n.indexOf(keyword) !== -1 || n.indexOf(compactKeyword) !== -1) && n.indexOf('marking') === -1;
+                    return n.indexOf(keyword) !== -1 && n.indexOf('marking') === -1;
                 });
             }
 
             document.getElementById('resultsTitle').textContent = '📁 ' + folderLabel;
             var container = document.getElementById('resultsContainer');
 
-            var html = '';
-            if (canShowDiscussion(folderTutorTag)) {
-                html += '<button class="search-btn discussion-mini-btn" type="button" onclick="sendDiscussion(' + JSON.stringify(folderTutorTag) + ')"><i class="bi bi-chat-dots me-1"></i> Discussion</button>';
-            }
-            html += '<div class="ap-folder-btn ap-back-btn" onclick="backToTutorRoot()">'
+            var html = '<div class="ap-folder-btn ap-back-btn" onclick="backToApRoot()">'
                      + '<i class="bi bi-arrow-left-circle-fill text-secondary me-2"></i>'
                      + '<span>← Back</span>'
                      + '</div>';
@@ -1915,9 +1712,9 @@ MINIAPP_HTML = """
             container.innerHTML = html;
         }
 
-        function backToTutorRoot() {
-            document.getElementById('resultsTitle').textContent = folderTutorLabel + ' Papers';
-            renderTutorFolderRoot();
+        function backToApRoot() {
+            document.getElementById('resultsTitle').textContent = 'Results';
+            renderApRoot();
         }
 
         function escapeHtml(str) {
@@ -1937,43 +1734,14 @@ MINIAPP_HTML = """
             return 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" fill="%234f86c6"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="white" font-size="60">' + txt + '</text></svg>';
         }
 
-        function renderSubjectCards() {
-            const grid = document.getElementById('subjectsGrid');
-            grid.innerHTML = SUBJECTS.map(function(s, idx) {
-                const id = 'subject-btn-' + idx;
-                return "<button class='subject-card' id='" + id + "' onclick='selectSubject(" + JSON.stringify(s.key) + ", " + JSON.stringify(id) + ")'>"
-                    + '<span>' + escapeHtml(s.label) + '</span>'
-                    + '<small>' + escapeHtml(s.hint) + '</small>'
-                    + '</button>';
-            }).join('');
-        }
-
-        function selectSubject(subject, btnId) {
-            document.querySelectorAll('.subject-card').forEach(function(b) { b.classList.remove('active'); });
-            const active = document.getElementById(btnId);
-            if (active) active.classList.add('active');
-            document.getElementById('tutorSectionTitle').style.display = 'block';
-            loadTutorButtons(subject);
-        }
-
-        function loadTutorButtons(subject) {
-            var url = '/api/tutor-buttons';
-            if (subject) {
-                url += '?subject=' + encodeURIComponent(subject);
-            }
-            fetch(url)
+        function loadTutorButtons() {
+            fetch('/api/tutor-buttons')
                 .then(function(r) { return r.json(); })
                 .then(function(data) {
                     const grid = document.getElementById('tutorsGrid');
                     const tutors = (data && data.tutors) ? data.tutors : [];
                     if (!tutors.length) {
-                        if (subject) {
-                            var friendly = SUBJECTS.filter(function(s) { return s.key === subject; })[0];
-                            var label = friendly ? friendly.label : subject;
-                            grid.innerHTML = '<div class="empty-state"><p>No tutors found for ' + escapeHtml(label) + '.</p></div>';
-                        } else {
-                            grid.innerHTML = '<div class="empty-state"><p>Select a subject to view tutors.</p></div>';
-                        }
+                        grid.innerHTML = '<div class="empty-state"><p>No tutors added yet.</p></div>';
                         return;
                     }
                     grid.innerHTML = tutors.map(function(t, idx) {
@@ -1999,9 +1767,6 @@ MINIAPP_HTML = """
             document.querySelectorAll('.tutor-btn').forEach(function(b) { b.classList.remove('active'); });
             currentTag = null;
             currentTutorLabel = null;
-            folderTutorTag = '';
-            folderTutorLabel = '';
-            folderAllFiles = [];
             setLoading(true);
             fetch('/api/search?q=' + encodeURIComponent(q))
                 .then(function(r) { return r.json(); })
@@ -2035,7 +1800,11 @@ MINIAPP_HTML = """
                 .then(function(r) { return r.json(); })
                 .then(function(data) {
                     setLoading(false);
-                    renderTutorFolderResults(data.files, tag, currentTutorLabel || tag);
+                    if (tag === 'ap') {
+                        renderApResults(data.files);
+                    } else {
+                        renderResults(data.files, 'No papers found for ' + (currentTutorLabel || tag) + '.');
+                    }
                 })
                 .catch(function() { setLoading(false); showToast('Failed to load papers. Please try again.'); });
         }
@@ -2136,7 +1905,6 @@ MINIAPP_HTML = """
             if (e.key === 'Enter') doSearch();
         });
         
-        renderSubjectCards();
         loadTutorButtons();
         checkAdminMode();
 
@@ -2227,10 +1995,7 @@ def api_tutors():
 
 @app.route('/api/tutor-buttons')
 def api_tutor_buttons():
-    subject = request.args.get('subject', '')
-    if subject and not normalize_subject(subject):
-        return jsonify({"tutors": []})
-    return jsonify({"tutors": get_tutor_buttons(subject=subject)})
+    return jsonify({"tutors": get_tutor_buttons()})
 
 @app.route('/api/tutor-image/<tutor_id>')
 def api_tutor_image(tutor_id):
@@ -2251,7 +2016,7 @@ def api_discussions_send():
     data = request.get_json(silent=True) or {}
     tutor = str(data.get('tutor', '')).strip().lower()
     user_id = data.get('user_id')
-    if tutor not in DISCUSSION_TUTORS or not str(user_id).strip():
+    if tutor not in ("ap", "ad", "sd") or not str(user_id).strip():
         return jsonify({"ok": False, "error": "Invalid request"}), 400
     try:
         status = get_subscription_status(int(user_id))
@@ -2398,3 +2163,7 @@ if __name__ == '__main__':
     bot.remove_webhook()
     bot.set_webhook(url=f"{URL}/webhook")
     app.run(host="0.0.0.0", port=int(os.environ.get('PORT', 5000)))
+
+
+
+

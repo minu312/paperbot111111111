@@ -988,7 +988,7 @@ def send_file_callback(call):
     try:
         file_data = files_col.find_one({"_id": ObjectId(call.data)})
         if file_data:
-            bot.send_document(call.message.chat.id, file_data['file_id'], caption=DEFAULT_CAPTION, parse_mode="HTML")
+            bot.send_document(call.message.chat.id, file_data['file_id'], caption=DEFAULT_CAPTION, parse_mode="HTML", protect_content=True)
             bot.answer_callback_query(call.id, "Sending file...")
             history_col.insert_one({"user_id": call.from_user.id, "query": "button_click", "file_sent": file_data['file_name']})
             if BACKUP_GROUP_ID:
@@ -2136,7 +2136,7 @@ def api_download():
         if not file_data:
             return jsonify({"ok": False, "error": "File not found"})
         
-        bot.send_document(uid, file_data['file_id'], caption=DEFAULT_CAPTION, parse_mode="HTML")
+        bot.send_document(uid, file_data['file_id'], caption=DEFAULT_CAPTION, parse_mode="HTML", protect_content=True)
         
         history_col.insert_one({
             "user_id": uid, 

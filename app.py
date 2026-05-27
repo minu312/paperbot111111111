@@ -29,6 +29,7 @@ ADMIN_CHANNEL_ID = os.environ.get('ADMIN_CHANNEL_ID')
 DISCUSSION_AP_MSG_ID = os.environ.get('DISCUSSION_AP_MSG_ID', '')
 DISCUSSION_AD_MSG_ID = os.environ.get('DISCUSSION_AD_MSG_ID', '')
 DISCUSSION_SD_MSG_ID = os.environ.get('DISCUSSION_SD_MSG_ID', '')
+DISCUSSION_NJ_MSG_ID = os.environ.get('DISCUSSION_NJ_MSG_ID', '')
 
 # Setup Caption Variable (Updated with symbols and bold text)
 DEFAULT_CAPTION = (
@@ -132,6 +133,7 @@ def send_discussion_messages(target_chat_id, tutor):
         "ap": DISCUSSION_AP_MSG_ID,
         "ad": DISCUSSION_AD_MSG_ID,
         "sd": DISCUSSION_SD_MSG_ID,
+        "nj": DISCUSSION_NJ_MSG_ID,
     }
     raw_refs = refs_by_tutor.get(str(tutor).lower(), "")
     tokens = [t for t in re.split(r'[\s,]+', raw_refs.strip()) if t]
@@ -159,11 +161,12 @@ def send_discussion_messages(target_chat_id, tutor):
 
 def send_discussion_tutor_buttons(chat_id, reply_to_message_id=None):
     markup = InlineKeyboardMarkup()
-    markup.row_width = 3
+    markup.row_width = 4
     markup.add(
         InlineKeyboardButton("AP", callback_data="discussion_tutor:ap"),
         InlineKeyboardButton("AD", callback_data="discussion_tutor:ad"),
         InlineKeyboardButton("SD", callback_data="discussion_tutor:sd"),
+        InlineKeyboardButton("NJ", callback_data="discussion_tutor:nj"),
     )
     bot.send_message(chat_id, "Please choose a tutor:", reply_markup=markup, reply_to_message_id=reply_to_message_id)
 
@@ -822,7 +825,7 @@ def search_files_text(message):
         return
 
     if re.search(r'\bdiscussions?\b', lower_text):
-        tutor_match = re.search(r'\b(ap|ad|sd)\b', lower_text)
+        tutor_match = re.search(r'\b(ap|ad|sd|nj)\b', lower_text)
         if tutor_match:
             ok, err = send_discussion_messages(message.chat.id, tutor_match.group(1))
             if not ok:
@@ -917,7 +920,7 @@ def verify_subscription_callback(call):
 @bot.callback_query_handler(func=lambda call: call.data.startswith('discussion_tutor:'))
 def discussion_tutor_callback(call):
     tutor = call.data.split(':', 1)[1] if ':' in call.data else ""
-    if tutor not in ("ap", "ad", "sd"):
+    if tutor not in ("ap", "ad", "sd", "nj"):
         bot.answer_callback_query(call.id, "Invalid tutor", show_alert=True)
         return
     ok, err = send_discussion_messages(call.message.chat.id, tutor)
@@ -1467,6 +1470,7 @@ MINIAPP_HTML = """
         <button class="search-btn" type="button" onclick="sendDiscussion('ap')">AP</button>
         <button class="search-btn" type="button" onclick="sendDiscussion('ad')">AD</button>
         <button class="search-btn" type="button" onclick="sendDiscussion('sd')">SD</button>
+        <button class="search-btn" type="button" onclick="sendDiscussion('nj')">NJ</button>
     </div>
 
     <div class="section-title" id="resultsTitle" style="display:none;">Results</div>
@@ -2016,7 +2020,7 @@ def api_discussions_send():
     data = request.get_json(silent=True) or {}
     tutor = str(data.get('tutor', '')).strip().lower()
     user_id = data.get('user_id')
-    if tutor not in ("ap", "ad", "sd") or not str(user_id).strip():
+    if tutor not in ("ap", "ad", "sd", "nj") or not str(user_id).strip():
         return jsonify({"ok": False, "error": "Invalid request"}), 400
     try:
         status = get_subscription_status(int(user_id))

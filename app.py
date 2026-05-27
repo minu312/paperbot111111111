@@ -144,13 +144,13 @@ def send_discussion_messages(target_chat_id, tutor):
         msg_id = _extract_msg_id_from_token(token)
         if msg_id is not None and admin_channel:
             try:
-                bot.forward_message(target_chat_id, admin_channel, msg_id)
+                bot.forward_message(target_chat_id, admin_channel, msg_id, protect_content=True)
                 sent_any = True
                 continue
             except Exception as e:
                 logging.error("Failed forwarding discussion message %s for %s: %s", msg_id, tutor, e)
         if token.startswith("http://") or token.startswith("https://"):
-            bot.send_message(target_chat_id, token)
+            bot.send_message(target_chat_id, token, protect_content=True)
             sent_any = True
 
     if sent_any:

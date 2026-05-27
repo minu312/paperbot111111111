@@ -142,17 +142,20 @@ def send_discussion_messages(target_chat_id, tutor):
 
     sent_any = False
     admin_channel = int(ADMIN_CHANNEL_ID) if ADMIN_CHANNEL_ID and str(ADMIN_CHANNEL_ID).lstrip('-').isdigit() else None
+    
+    is_nj = (str(tutor).lower() == "nj")
+    
     for token in tokens:
         msg_id = _extract_msg_id_from_token(token)
         if msg_id is not None and admin_channel:
             try:
-                bot.forward_message(target_chat_id, admin_channel, msg_id)
+                bot.forward_message(target_chat_id, admin_channel, msg_id, protect_content=is_nj)
                 sent_any = True
                 continue
             except Exception as e:
                 logging.error("Failed forwarding discussion message %s for %s: %s", msg_id, tutor, e)
         if token.startswith("http://") or token.startswith("https://"):
-            bot.send_message(target_chat_id, token)
+            bot.send_message(target_chat_id, token, protect_content=is_nj)
             sent_any = True
 
     if sent_any:
@@ -991,7 +994,8 @@ def send_file_callback(call):
     try:
         file_data = files_col.find_one({"_id": ObjectId(call.data)})
         if file_data:
-            bot.send_document(call.message.chat.id, file_data['file_id'], caption=DEFAULT_CAPTION, parse_mode="HTML")
+            is_nj_file = 'nj' in file_data['file_name'].lower()
+            bot.send_document(call.message.chat.id, file_data['file_id'], caption=DEFAULT_CAPTION, parse_mode="HTML", protect_content=is_nj_file)
             bot.answer_callback_query(call.id, "Sending file...")
             history_col.insert_one({"user_id": call.from_user.id, "query": "button_click", "file_sent": file_data['file_name']})
             if BACKUP_GROUP_ID:
@@ -2140,7 +2144,10 @@ def api_download():
         if not file_data:
             return jsonify({"ok": False, "error": "File not found"})
         
-        bot.send_document(uid, file_data['file_id'], caption=DEFAULT_CAPTION, parse_mode="HTML")
+        is_nj_file = 'nj' in file_data['file_name'].lower()
+        
+        bot.send_document(uid, file_data['file_id'], caption=DEFAULT_CAPTION, parse_mode="HTML", protect_content=is_nj_file)
+        
         
         history_col.insert_one({
             "user_id": uid, 

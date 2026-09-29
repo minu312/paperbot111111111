@@ -25,6 +25,7 @@ FORCE_CHANNEL_ID = os.environ.get('FORCE_CHANNEL_ID')  # e.g., "-100123456789"
 FORCE_GROUP_ID = os.environ.get('FORCE_GROUP_ID')      # e.g., "-100987654321"
 FORCE_CHANNEL_URL = os.environ.get('FORCE_CHANNEL_URL')
 FORCE_GROUP_URL = os.environ.get('FORCE_GROUP_URL')
+RK_GROUP_ID = os.environ.get('RK_GROUP_ID')
 ADMIN_CHANNEL_ID = os.environ.get('ADMIN_CHANNEL_ID')
 DISCUSSION_AP_MSG_ID = os.environ.get('DISCUSSION_AP_MSG_ID', '')
 DISCUSSION_AD_MSG_ID = os.environ.get('DISCUSSION_AD_MSG_ID', '')
@@ -193,6 +194,18 @@ def get_subscription_status(user_id):
     else:
         group_ok = True
     return {"channel": channel_ok, "group": group_ok}
+
+def check_rk_membership(user_id):
+    if not RK_GROUP_ID:
+        logging.warning("RK_GROUP_ID is not configured.")
+        return True
+    try:
+        status = bot.get_chat_member(int(RK_GROUP_ID), user_id).status
+        return status in ['member', 'administrator', 'creator']
+    except Exception as e:
+        logging.error("RK membership check failed for user %s: %s", user_id, e)
+        return False
+
 
 def enforce_subscription(message):
     status = get_subscription_status(message.from_user.id)
@@ -753,6 +766,22 @@ def search_files_text(message):
         return
     if message.text.startswith('/'):
         return
+
+    # All RK papers require membership in the RK group.
+    # No Join button is shown here; users only get Verify Again.
+    lower_text = message.text.strip().lower()
+    if lower_text.startswith("rk") and not check_rk_membership(message.from_user.id):
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("🔄 Verify Again", callback_data="verify_rk"))
+        bot.reply_to(
+            message,
+            "🔒 <b>RK Papers Restricted</b>\n\n"
+            "You must be a member of the RK group to access RK papers.\n\n"
+            "After joining the group, tap <b>Verify Again</b>.",
+            reply_markup=markup,
+            parse_mode="HTML"
+        )
+        return
         
     query = normalize_query(message.text.lower())
     user = message.from_user
@@ -919,6 +948,19 @@ def verify_subscription_callback(call):
             bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=markup)
         except Exception:
             pass
+
+@bot.callback_query_handler(func=lambda call: call.data == 'verify_rk')
+def verify_rk_callback(call):
+    user_id = call.from_user.id
+    if check_rk_membership(user_id):
+        bot.answer_callback_query(call.id, "✅ Membership verified!")
+        bot.edit_message_text(
+            "✅ <b>RK group membership verified!</b>\n\nYou can now search for RK papers.",
+            call.message.chat.id, call.message.message_id, parse_mode="HTML"
+        )
+    else:
+        bot.answer_callback_query(call.id, "❌ You are not a member of the RK group yet.", show_alert=True)
+
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('discussion_tutor:'))
 def discussion_tutor_callback(call):
@@ -1776,7 +1818,8 @@ MINIAPP_HTML = """
             currentTag = null;
             currentTutorLabel = null;
             setLoading(true);
-            fetch('/api/search?q=' + encodeURIComponent(q))
+            const userId = (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) ? tg.initDataUnsafe.user.id : '';
+            fetch('/api/search?q=' + encodeURIComponent(q) + '&user_id=' + encodeURIComponent(userId))
                 .then(function(r) { return r.json(); })
                 .then(function(data) {
                     setLoading(false);
@@ -1972,8 +2015,17 @@ def miniapp():
 @app.route('/api/search')
 def api_search():
     q = normalize_query(request.args.get('q', '').strip().lower())
+    user_id = request.args.get('user_id')
     if not q:
         return jsonify({"files": [], "error": "No query provided"})
+
+    if q.startswith("rk"):
+        try:
+            if not user_id or not check_rk_membership(int(user_id)):
+                return jsonify({"files": [], "error": "rk_membership_required"})
+        except (TypeError, ValueError):
+            return jsonify({"files": [], "error": "rk_membership_required"})
+
     try:
         results = list(files_col.find(
             {"file_name": {"$regex": re.escape(q), "$options": "i"}}
@@ -2143,6 +2195,9 @@ def api_download():
         file_data = files_col.find_one({"_id": ObjectId(file_id)})
         if not file_data:
             return jsonify({"ok": False, "error": "File not found"})
+
+        if file_data.get('file_name', '').strip().lower().startswith('rk') and not check_rk_membership(uid):
+            return jsonify({"ok": False, "error": "rk_membership_required"})
         
         is_nj_file = 'nj' in file_data['file_name'].lower()
         
@@ -2174,7 +2229,6 @@ if __name__ == '__main__':
     bot.remove_webhook()
     bot.set_webhook(url=f"{URL}/webhook")
     app.run(host="0.0.0.0", port=int(os.environ.get('PORT', 5000)))
-
 
 
 

@@ -7,6 +7,9 @@ from flask import Flask, request, render_template_string, jsonify, send_from_dir
 from pymongo import MongoClient
 from pymongo.errors import PyMongoError
 import uuid
+import secrets
+import tempfile
+import fitz
 from bson.objectid import ObjectId
 from datetime import datetime, timezone
 from html import escape
@@ -58,6 +61,122 @@ admins_col = db['admins']
 tutor_buttons_col = db['tutor_buttons']
 broadcast_logs_col = db['broadcast_logs']
 banned_users_col = db['banned_users']
+pdf_copy_ids_col = db['pdf_copy_ids']
+
+def _generate_pdf_copy_id():
+    """Generate a unique Learn-X copy identifier."""
+    while True:
+        copy_id = f"LX-{secrets.token_hex(4).upper()}"
+        if not pdf_copy_ids_col.find_one({"copy_id": copy_id}):
+            return copy_id
+
+
+def _create_watermarked_pdf(file_data, user):
+    """
+    Download a Telegram PDF, add a very small/subtle Learn-X copy ID to each
+    page, and return (path, copy_id). The identifier is intentionally small
+    and low-opacity so it does not interfere with normal reading.
+    """
+    original_path = None
+    output_path = None
+    try:
+        telegram_file = bot.get_file(file_data['file_id'])
+        pdf_bytes = bot.download_file(telegram_file.file_path)
+
+        if not pdf_bytes.startswith(b'%PDF'):
+            raise ValueError("The requested file is not a PDF")
+
+        copy_id = _generate_pdf_copy_id()
+
+        original = tempfile.NamedTemporaryFile(delete=False, suffix='.pdf')
+        original.write(pdf_bytes)
+        original.close()
+        original_path = original.name
+
+        output = tempfile.NamedTemporaryFile(delete=False, suffix='.pdf')
+        output.close()
+        output_path = output.name
+
+        doc = fitz.open(original_path)
+        for page in doc:
+            # Small, low-opacity identifier in the bottom-right margin.
+            text = f"Learn-X Copy ID: {copy_id}"
+            rect = page.rect
+            page.insert_text(
+                (rect.width - 92, rect.height - 5),
+                text,
+                fontsize=2.5,
+                fontname='helv',
+                color=(0.35, 0.35, 0.35),
+                fill_opacity=0.16,
+                stroke_opacity=0.16,
+                overlay=True,
+            )
+
+        doc.save(output_path, garbage=4, deflate=True)
+        doc.close()
+
+        pdf_copy_ids_col.insert_one({
+            "copy_id": copy_id,
+            "user_id": user.id,
+            "username": user.username or "",
+            "first_name": user.first_name or "",
+            "last_name": user.last_name or "",
+            "file_id": file_data.get('file_id'),
+            "file_name": file_data.get('file_name', ''),
+            "created_at": datetime.now(timezone.utc),
+        })
+
+        return output_path, copy_id
+
+    except Exception:
+        if output_path:
+            try:
+                os.remove(output_path)
+            except Exception:
+                pass
+        raise
+    finally:
+        if original_path:
+            try:
+                os.remove(original_path)
+            except Exception:
+                pass
+
+
+def _send_pdf_with_copy_id(chat_id, file_data, user, protect_content=False):
+    """Send an RK PDF with a personalized copy ID; send other PDFs normally."""
+    is_rk_file = file_data.get('file_name', '').strip().lower().startswith('rk')
+
+    if not is_rk_file:
+        bot.send_document(
+            chat_id,
+            file_data['file_id'],
+            caption=DEFAULT_CAPTION,
+            parse_mode="HTML",
+            protect_content=protect_content,
+        )
+        return None
+
+    watermarked_path = None
+    try:
+        watermarked_path, copy_id = _create_watermarked_pdf(file_data, user)
+        with open(watermarked_path, 'rb') as pdf_file:
+            bot.send_document(
+                chat_id,
+                pdf_file,
+                caption=DEFAULT_CAPTION,
+                parse_mode="HTML",
+                protect_content=protect_content,
+            )
+        return copy_id
+    finally:
+        if watermarked_path:
+            try:
+                os.remove(watermarked_path)
+            except Exception:
+                pass
+
 
 DEFAULT_TUTOR_BUTTONS = [
     {"name": "Anuradha Perera", "search_tag": "ap", "image_url": "/static/ap.jpg"},
@@ -321,6 +440,41 @@ def contact(message):
             bot.reply_to(message, "Failed to send your message. Please try again later.")
     else:
         bot.reply_to(message, "Admin group is not configured.")
+
+@bot.message_handler(commands=['verifycopy'])
+def verify_copy(message):
+    """Admin/sub-admin lookup for a Learn-X PDF copy ID."""
+    if message.chat.type != 'private' or not is_admin_or_subadmin(message.from_user.id):
+        return
+
+    parts = message.text.split(None, 1)
+    if len(parts) < 2 or not parts[1].strip():
+        bot.reply_to(message, "Usage: /verifycopy <copy_id>")
+        return
+
+    copy_id = parts[1].strip().upper()
+    record = pdf_copy_ids_col.find_one({"copy_id": copy_id})
+
+    if not record:
+        bot.reply_to(message, "❌ Copy ID not found.")
+        return
+
+    username = f"@{record['username']}" if record.get('username') else "No username"
+    full_name = ' '.join(filter(None, [record.get('first_name', ''), record.get('last_name', '')])) or "Unknown"
+    created_at = record.get('created_at')
+    created_text = created_at.strftime('%Y-%m-%d %H:%M:%S UTC') if created_at else "Unknown"
+
+    bot.reply_to(
+        message,
+        "🔎 <b>Learn-X Copy Verification</b>\n\n"
+        f"<b>Copy ID:</b> <code>{escape(copy_id)}</code>\n"
+        f"<b>Paper:</b> {escape(record.get('file_name', 'Unknown'))}\n"
+        f"<b>User ID:</b> <code>{record.get('user_id', 'Unknown')}</code>\n"
+        f"<b>Name:</b> {escape(full_name)}\n"
+        f"<b>Username:</b> {escape(username)}\n"
+        f"<b>Sent:</b> {escape(created_text)}",
+        parse_mode="HTML"
+    )
 
 @bot.message_handler(commands=['addadmin'])
 def add_admin(message):
@@ -1037,9 +1191,12 @@ def send_file_callback(call):
         file_data = files_col.find_one({"_id": ObjectId(call.data)})
         if file_data:
             is_nj_file = 'nj' in file_data['file_name'].lower()
-            bot.send_document(call.message.chat.id, file_data['file_id'], caption=DEFAULT_CAPTION, parse_mode="HTML", protect_content=is_nj_file)
+            copy_id = _send_pdf_with_copy_id(call.message.chat.id, file_data, call.from_user, protect_content=is_nj_file)
             bot.answer_callback_query(call.id, "Sending file...")
-            history_col.insert_one({"user_id": call.from_user.id, "query": "button_click", "file_sent": file_data['file_name']})
+            history_record = {"user_id": call.from_user.id, "query": "button_click", "file_sent": file_data['file_name']}
+            if copy_id:
+                history_record["copy_id"] = copy_id
+            history_col.insert_one(history_record)
             if BACKUP_GROUP_ID:
                 try:
                     user = call.from_user
@@ -2201,16 +2358,18 @@ def api_download():
         
         is_nj_file = 'nj' in file_data['file_name'].lower()
         
-        bot.send_document(uid, file_data['file_id'], caption=DEFAULT_CAPTION, parse_mode="HTML", protect_content=is_nj_file)
-        
-        
-        history_col.insert_one({
+        copy_id = _send_pdf_with_copy_id(uid, file_data, type('MiniAppUser', (), {'id': uid, 'username': username, 'first_name': first_name, 'last_name': last_name})(), protect_content=is_nj_file)
+
+        history_record = {
             "user_id": uid, 
             "query": "miniapp_download", 
             "file_sent": file_name,
             "ip_address": user_ip,
             "device_info": device_info
-        })
+        }
+        if copy_id:
+            history_record["copy_id"] = copy_id
+        history_col.insert_one(history_record)
         
         if BACKUP_GROUP_ID:
             try:

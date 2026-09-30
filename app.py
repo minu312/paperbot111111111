@@ -115,24 +115,33 @@ def _create_watermarked_pdf(file_data, user):
             (0.82, 0.90),
         )
 
+        watermark_text = f"Learn-X Copy ID: {copy_id}"
+
         for page in doc:
             rect = page.rect
             x_ratio, y_ratio = positions[secrets.randbelow(len(positions))]
 
-            # Keep the identifier inside the page with a small safety margin.
-            x = max(4, min(rect.width - 45, rect.width * x_ratio))
-            y = max(8, min(rect.height - 4, rect.height * y_ratio))
+            # Keep the identifier safely inside the page. The watermark is
+            # intentionally readable when zoomed in, but unobtrusive at normal size.
+            x = max(8, min(rect.width - 145, rect.width * x_ratio))
+            y = max(14, min(rect.height - 8, rect.height * y_ratio))
 
             page.insert_text(
                 (x, y),
-                f"Learn-X Copy ID: {copy_id}",
-                fontsize=3.5,
+                watermark_text,
+                fontsize=5.0,
                 fontname='helv',
-                color=(0.35, 0.35, 0.35),
-                fill_opacity=0.28,
-                stroke_opacity=0.28,
+                color=(0.0, 0.0, 0.0),
+                fill_opacity=0.42,
+                stroke_opacity=0.0,
                 overlay=True,
             )
+
+        # Also store the same identifier in PDF metadata. This gives admins
+        # a second way to confirm the copy if the visible watermark is hard to spot.
+        metadata = doc.metadata or {}
+        metadata['keywords'] = f"Learn-X Copy ID: {copy_id}"
+        doc.set_metadata(metadata)
 
         doc.save(output_path, garbage=4, deflate=True)
         doc.close()
@@ -166,7 +175,8 @@ def _create_watermarked_pdf(file_data, user):
 
 def _send_pdf_with_copy_id(chat_id, file_data, user, protect_content=False):
     """Send an RK PDF with a personalized copy ID; send other PDFs normally."""
-    is_rk_file = file_data.get('file_name', '').strip().lower().startswith('rk')
+    file_name_for_check = file_data.get('file_name', '').strip().lower()
+    is_rk_file = bool(re.search(r'(?<![a-z])rk(?![a-z])', file_name_for_check))
 
     if not is_rk_file:
         bot.send_document(

@@ -73,9 +73,12 @@ def _generate_pdf_copy_id():
 
 def _create_watermarked_pdf(file_data, user):
     """
-    Download a Telegram PDF, add a very small/subtle Learn-X copy ID to each
-    page, and return (path, copy_id). The identifier is intentionally small
-    and low-opacity so it does not interfere with normal reading.
+    Create a personalized RK PDF copy with a unique Learn-X copy ID.
+
+    The copy ID is embedded as very small, low-opacity PDF text at a
+    pseudo-random position on every page. This keeps the identifier
+    unobtrusive during normal reading while allowing it to be recovered
+    from a shared PDF and checked with /verifycopy.
     """
     original_path = None
     output_path = None
@@ -98,18 +101,36 @@ def _create_watermarked_pdf(file_data, user):
         output_path = output.name
 
         doc = fitz.open(original_path)
+
+        # Different safe margin positions. A fresh position is selected
+        # independently for every page, making the watermark harder to spot.
+        positions = (
+            (0.08, 0.08),
+            (0.50, 0.08),
+            (0.82, 0.08),
+            (0.08, 0.50),
+            (0.82, 0.50),
+            (0.08, 0.90),
+            (0.50, 0.90),
+            (0.82, 0.90),
+        )
+
         for page in doc:
-            # Small, low-opacity identifier in the bottom-right margin.
-            text = f"Learn-X Copy ID: {copy_id}"
             rect = page.rect
+            x_ratio, y_ratio = positions[secrets.randbelow(len(positions))]
+
+            # Keep the identifier inside the page with a small safety margin.
+            x = max(4, min(rect.width - 45, rect.width * x_ratio))
+            y = max(8, min(rect.height - 4, rect.height * y_ratio))
+
             page.insert_text(
-                (rect.width - 92, rect.height - 5),
-                text,
-                fontsize=2.5,
+                (x, y),
+                copy_id,
+                fontsize=1.5,
                 fontname='helv',
-                color=(0.35, 0.35, 0.35),
-                fill_opacity=0.16,
-                stroke_opacity=0.16,
+                color=(0.45, 0.45, 0.45),
+                fill_opacity=0.04,
+                stroke_opacity=0.04,
                 overlay=True,
             )
 
@@ -142,7 +163,6 @@ def _create_watermarked_pdf(file_data, user):
                 os.remove(original_path)
             except Exception:
                 pass
-
 
 def _send_pdf_with_copy_id(chat_id, file_data, user, protect_content=False):
     """Send an RK PDF with a personalized copy ID; send other PDFs normally."""
@@ -2388,6 +2408,5 @@ if __name__ == '__main__':
     bot.remove_webhook()
     bot.set_webhook(url=f"{URL}/webhook")
     app.run(host="0.0.0.0", port=int(os.environ.get('PORT', 5000)))
-
 
 

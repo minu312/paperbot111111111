@@ -125,12 +125,12 @@ def _create_watermarked_pdf(file_data, user):
 
             page.insert_text(
                 (x, y),
-                copy_id,
-                fontsize=1.5,
+                f"Learn-X Copy ID: {copy_id}",
+                fontsize=3.5,
                 fontname='helv',
-                color=(0.45, 0.45, 0.45),
-                fill_opacity=0.04,
-                stroke_opacity=0.04,
+                color=(0.35, 0.35, 0.35),
+                fill_opacity=0.28,
+                stroke_opacity=0.28,
                 overlay=True,
             )
 
